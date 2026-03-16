@@ -1,0 +1,108 @@
+name: Release Magento Module ZIP
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine version + artifact name
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"          # e.g. v1.1.0
+          VERSION="${TAG#v}"                # 1.1.0
+          NAME="paypercut-presta-shop-${VERSION}.zip"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "zip_name=$NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Sync config.xml version to tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f config.xml
+          python - <<'PY'
+          import os
+          import xml.etree.ElementTree as ET
+
+          version = os.environ["VERSION"]
+
+          tree = ET.parse("config.xml")
+          root = tree.getroot()
+
+          version_el = root.find("version")
+          if version_el is None:
+              raise SystemExit("config.xml does not contain <version>")
+
+          version_el.text = version
+
+          tree.write("config.xml", encoding="UTF-8", xml_declaration=True)
+          PY
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+
+      - name: Build ZIP (module root at ZIP root)
+        shell: bash
+        run: |
+          set -euo pipefail
+          
+          MODULE_DIR="."
+          ZIP="${{ steps.meta.outputs.zip_name }}"
+
+          mkdir -p dist
+          rm -f "dist/${ZIP}"
+
+          # Create zip from inside the module directory so paths are correct (no top-level folder)
+          pushd "${MODULE_DIR}" >/dev/null
+
+          # Basic sanity checks
+          test -f config.xml
+          test -f index.php
+
+          # Build zip excluding typical junk
+          zip -r "dist/${ZIP}" . \
+            -x "*.git*" \
+            -x "vendor/*" \
+            -x "node_modules/*" \
+            -x ".idea/*" \
+            -x "internal/*" \
+            -x ".vscode/*" \
+            -x ".DS_Store" 
+
+          popd >/dev/null
+
+      - name: Verify ZIP contents (top-level files exist)
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP="dist/${{ steps.meta.outputs.zip_name }}"
+
+          echo "ZIP listing (first 80 lines):"
+          zipinfo -1 "$ZIP" | head -80
+
+          # Ensure these exist at the ZIP root level
+          zipinfo -1 "$ZIP" | grep -x "config.xml" >/dev/null
+          zipinfo -1 "$ZIP" | grep -x "index.php" >/dev/null
+
+      - name: Create GitHub Release + upload ZIP
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.tag }}
+          generate_release_notes: true
+          files: |
+            dist/${{ steps.meta.outputs.zip_name }}

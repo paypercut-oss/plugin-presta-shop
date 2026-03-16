@@ -1,0 +1,152 @@
+/**
+ * Paypercut - Front-office Styles
+ *
+ * Checkout payment option styling.
+ *
+ * @author    Paypercut <support@paypercut.io>
+ * @copyright Paypercut
+ * @license   https://mit-license.org ( MIT )
+ */
+
+/* Payment methods list */
+.paypercut-methods__label {
+    font-size: 0.85em;
+    color: #666;
+    margin-bottom: 5px;
+}
+
+.paypercut-methods__list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.paypercut-methods__item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 10px;
+    background: #f7f7f7;
+    border: 1px solid #e5e5e5;
+    border-radius: 4px;
+    font-size: 0.85em;
+}
+
+.paypercut-methods__icon {
+    width: 20px;
+    height: 14px;
+    display: inline-block;
+    background-size: contain;
+    background-repeat: no-repeat;
+    background-position: center;
+}
+
+.paypercut-icon--card {
+    background-image: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%23333"><path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 14H4V10h16v8zm0-10H4V6h16v2z"/></svg>');
+}
+
+.paypercut-icon--google_pay {
+    background-image: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="%234285F4" d="M12.24 10.285V14.4h6.806c-.275 1.765-2.056 5.174-6.806 5.174-4.095 0-7.439-3.389-7.439-7.574s3.345-7.574 7.439-7.574c2.33 0 3.891.989 4.785 1.849l3.254-3.138C18.189 1.186 15.479 0 12.24 0c-6.635 0-12 5.365-12 12s5.365 12 12 12c6.926 0 11.52-4.869 11.52-11.726 0-.788-.085-1.39-.189-1.989H12.24z"/></svg>');
+}
+
+.paypercut-icon--apple_pay {
+    background-image: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%23000"><path d="M17.72 7.56c-.97-1.22-2.33-1.93-3.62-1.93-1.69 0-2.41.81-3.58.81-1.21 0-2.13-.8-3.59-.8C5.57 5.64 4.03 6.4 3.01 7.8 1.54 9.84 1.8 13.62 4.17 17.3c.85 1.32 1.98 2.8 3.46 2.82 1.33.01 1.71-.86 3.53-.87 1.82-.01 2.16.88 3.49.87 1.48-.02 2.67-1.67 3.52-2.98.61-.95.84-1.43 1.31-2.5-3.45-1.31-4-6.2-.58-8.08zm-4.04-3.39c.73-.94 1.28-2.26 1.08-3.6-1.18.08-2.55.83-3.35 1.81-.72.88-1.32 2.21-1.08 3.49 1.28.04 2.6-.72 3.35-1.7z"/></svg>');
+}
+
+/* Secure payment note */
+.paypercut-secure {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.8em;
+    color: #388e3c;
+    margin-top: 10px;
+}
+
+.paypercut-secure i {
+    font-size: 14px;
+}
+
+/* Embedded checkout */
+#paypercut-embedded-checkout {
+    min-height: 200px;
+    position: relative;
+}
+
+/* Terms-not-accepted overlay — blocks interaction with the payment iframe */
+.paypercut-terms-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.85);
+    cursor: not-allowed;
+}
+
+.paypercut-terms-overlay__message {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 20px;
+    background: #fff3cd;
+    border: 1px solid #ffc107;
+    border-radius: 6px;
+    color: #856404;
+    font-size: 0.9em;
+    font-weight: 500;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.paypercut-terms-overlay__message i {
+    font-size: 18px;
+}
+
+#paypercut-checkout-container {
+    position: relative;
+    min-height: 150px;
+}
+
+.paypercut-loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 40px 0;
+    color: #999;
+}
+
+.paypercut-spinner {
+    width: 32px;
+    height: 32px;
+    border: 3px solid #e5e5e5;
+    border-top-color: #333;
+    border-radius: 50%;
+    animation: paypercut-spin 0.8s linear infinite;
+    margin-bottom: 10px;
+}
+
+@keyframes paypercut-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* Order detail */
+.paypercut-order-detail dl {
+    display: grid;
+    grid-template-columns: 160px 1fr;
+    gap: 6px 12px;
+}
+
+.paypercut-order-detail dt {
+    color: #666;
+    font-weight: 600;
+}

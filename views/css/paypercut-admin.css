@@ -1,0 +1,77 @@
+/**
+ * Paypercut - Admin Styles
+ *
+ * Admin configuration page and order panel styling.
+ *
+ * @author    Paypercut <support@paypercut.io>
+ * @copyright Paypercut
+ * @license   https://mit-license.org ( MIT )
+ */
+
+/* Config page */
+.paypercut-admin-config .nav-tabs {
+    margin-bottom: 0;
+}
+
+.paypercut-admin-config .tab-content > .tab-pane > .panel {
+    border-top: none;
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
+}
+
+.paypercut-admin-config .panel-footer {
+    overflow: hidden;
+}
+
+/* Order panel */
+.paypercut-admin-order-panel .panel-heading img {
+    margin-right: 6px;
+    vertical-align: middle;
+}
+
+.paypercut-transaction-table td:first-child {
+    width: 160px;
+    white-space: nowrap;
+}
+
+.paypercut-refund-table code {
+    font-size: 0.85em;
+}
+
+.paypercut-refund-form .input-group {
+    max-width: 250px;
+}
+
+.paypercut-refund-form .help-block {
+    font-size: 0.85em;
+}
+
+/* ---------------------------------------------------------------
+ * Hide default PrestaShop refund / return buttons for Paypercut
+ * orders (body class added by paypercut-admin.js).
+ * Covers PrestaShop 1.7.7+ and 8.x admin order pages.
+ * --------------------------------------------------------------- */
+body.paypercut-order button.partial-refund-display,
+body.paypercut-order button.standard-refund-display,
+body.paypercut-order button.return-product-display {
+    display: none !important;
+}
+
+/* Hide the refund / return form rows that these buttons toggle */
+body.paypercut-order .cancel-product-element.partial-refund,
+body.paypercut-order .cancel-product-element.standard-refund,
+body.paypercut-order .cancel-product-element.return-product {
+    display: none !important;
+}
+
+/* Connection test */
+#paypercut-connection-result .label {
+    display: inline-block;
+    margin-left: 8px;
+}
+
+/* Webhook result */
+#paypercut-webhook-result .label {
+    display: inline-block;
+    margin-left: 8px;
+}
