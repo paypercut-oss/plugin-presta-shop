@@ -55,37 +55,42 @@ jobs:
         env:
           VERSION: ${{ steps.meta.outputs.version }}
 
-      - name: Build ZIP (module root at ZIP root)
+      - name: Build ZIP (module under paypercut/)
         shell: bash
         run: |
           set -euo pipefail
-          
-          MODULE_DIR="."
+
           ZIP="${{ steps.meta.outputs.zip_name }}"
+          PKG_ROOT="$(pwd)"
+          STAGE_DIR="$(mktemp -d)"
+          MODULE_DIR="${STAGE_DIR}/paypercut"
 
           mkdir -p dist
           rm -f "dist/${ZIP}"
-
-          # Create zip from inside the module directory so paths are correct (no top-level folder)
-          pushd "${MODULE_DIR}" >/dev/null
+          mkdir -p "${MODULE_DIR}"
 
           # Basic sanity checks
           test -f config.xml
           test -f index.php
 
-          # Build zip excluding typical junk
-          zip -r "dist/${ZIP}" . \
-            -x "*.git*" \
-            -x "vendor/*" \
-            -x "node_modules/*" \
-            -x ".idea/*" \
-            -x "internal/*" \
-            -x ".vscode/*" \
-            -x ".DS_Store" 
+          # Copy module contents into staging folder under paypercut/
+          rsync -a ./ "${MODULE_DIR}/" \
+            --exclude ".git/" \
+            --exclude ".github/" \
+            --exclude "vendor/" \
+            --exclude "node_modules/" \
+            --exclude ".idea/" \
+            --exclude ".vscode/" \
+            --exclude "internal/" \
+            --exclude "dist/" \
+            --exclude ".DS_Store"
 
+          # Build zip so it contains paypercut/... at root
+          pushd "${STAGE_DIR}" >/dev/null
+          zip -r "${PKG_ROOT}/dist/${ZIP}" "paypercut"
           popd >/dev/null
 
-      - name: Verify ZIP contents (top-level files exist)
+      - name: Verify ZIP contents (top-level folder exists)
         shell: bash
         run: |
           set -euo pipefail
@@ -94,14 +99,19 @@ jobs:
           echo "ZIP listing (first 80 lines):"
           zipinfo -1 "$ZIP" | head -80
 
-          # Ensure these exist at the ZIP root level
-          zipinfo -1 "$ZIP" | grep -x "config.xml" >/dev/null
-          zipinfo -1 "$ZIP" | grep -x "index.php" >/dev/null
+          # Ensure module lives under paypercut/
+          zipinfo -1 "$ZIP" | grep -x "paypercut/" >/dev/null
+          zipinfo -1 "$ZIP" | grep -x "paypercut/config.xml" >/dev/null
+          zipinfo -1 "$ZIP" | grep -x "paypercut/index.php" >/dev/null
 
       - name: Create GitHub Release + upload ZIP
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.tag }}
+          generate_release_notes: true
+          files: |
+            dist/${{ steps.meta.outputs.zip_name }}
           name: ${{ steps.meta.outputs.tag }}
           generate_release_notes: true
           files: |
