@@ -28,7 +28,7 @@ jobs:
           NAME="paypercut-presta-shop-${VERSION}.zip"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "zip_name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "zip_name=paypercut.zip" >> "$GITHUB_OUTPUT"
 
       - name: Sync config.xml version to tag
         shell: bash
