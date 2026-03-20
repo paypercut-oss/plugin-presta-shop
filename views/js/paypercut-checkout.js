@@ -218,7 +218,7 @@
     var termsOverlay = null;
 
     /**
-     * Find the T&C checkbox (PS 8.x/9.x).
+     * Find the T&C checkbox (PS 8.x/9.x + custom themes).
      */
     function getTermsCheckbox() {
         if (termsCheckbox) return termsCheckbox;
@@ -228,7 +228,11 @@
             ) ||
             document.querySelector(
                 'input[name="conditions_to_approve[terms-and-conditions]"]',
-            );
+            ) ||
+            // Custom theme fallbacks
+            document.getElementById("confirm-terms") ||
+            document.getElementById("confirm_terms") ||
+            document.querySelector('input[name="confirm_terms"]');
         return termsCheckbox;
     }
 
@@ -572,6 +576,58 @@
         return false;
     }
 
+    /**
+     * Check if a tab-link <a> element corresponds to Paypercut.
+     * Custom themes may use <a> tabs with data-action URLs or class names.
+     */
+    function isPaypercutTab(tabLink) {
+        // Check by class name
+        if (tabLink.classList && tabLink.classList.contains("paypercut")) {
+            return true;
+        }
+        // Check data-action attribute for paypercut URL
+        var action = tabLink.getAttribute("data-action") || "";
+        if (action.indexOf("paypercut") !== -1) {
+            return true;
+        }
+        // Check href attribute
+        var href = tabLink.getAttribute("href") || "";
+        if (href.indexOf("paypercut") !== -1 && href.indexOf("#") !== 0) {
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Detect Paypercut selection via hidden input or active tab (custom themes).
+     * Returns true if Paypercut is currently the selected payment method.
+     */
+    function detectCustomThemePaypercut() {
+        // Check hidden payment_method input
+        var hiddenInput =
+            document.getElementById("payment_method") ||
+            document.querySelector('input[name="payment_method"]');
+        if (
+            hiddenInput &&
+            hiddenInput.value &&
+            hiddenInput.value.indexOf("paypercut") !== -1
+        ) {
+            log(
+                "detectCustomThemePaypercut: hidden input contains paypercut URL.",
+            );
+            return true;
+        }
+        // Check for active tab link with paypercut class or data-action
+        var activeTab = document.querySelector(
+            "#nav-tab-payment .nav-link.active, .payments .nav-link.active",
+        );
+        if (activeTab && isPaypercutTab(activeTab)) {
+            log("detectCustomThemePaypercut: active tab link is Paypercut.");
+            return true;
+        }
+        return false;
+    }
+
     function handlePaymentOptionChange() {
         var radios = document.querySelectorAll('input[name="payment-option"]');
         log(
@@ -581,19 +637,20 @@
         );
 
         if (radios.length === 0) {
-            warn(
-                "handlePaymentOptionChange: no radio buttons found. Is the checkout page fully loaded?",
+            // No standard PS radio buttons — try custom-theme detection
+            log(
+                "handlePaymentOptionChange: no radios, trying custom theme detection…",
             );
-            // Debug: look for any radios or Paypercut-related elements
-            var anyRadios = document.querySelectorAll('input[type="radio"]');
-            log("  Total radio inputs on page:", anyRadios.length);
-            for (var j = 0; j < anyRadios.length; j++) {
+            if (detectCustomThemePaypercut()) {
                 log(
-                    "  Radio:",
-                    anyRadios[j].name,
-                    anyRadios[j].id,
-                    anyRadios[j].type,
+                    "handlePaymentOptionChange: → Paypercut SELECTED (custom theme)",
                 );
+                onPaypercutSelected();
+            } else {
+                log(
+                    "handlePaymentOptionChange: → Paypercut NOT selected (custom theme)",
+                );
+                onPaypercutDeselected();
             }
             return;
         }
@@ -632,6 +689,11 @@
             // Small delay to let PS toggle the form containers
             setTimeout(handlePaymentOptionChange, 50);
         }
+        // Also detect changes on hidden payment_method input (custom themes)
+        if (e.target && e.target.name === "payment_method") {
+            log("Event: change on payment_method hidden input");
+            setTimeout(handlePaymentOptionChange, 50);
+        }
     });
 
     // Also handle click for broader compat (clicks on labels that toggle radios)
@@ -651,12 +713,61 @@
             if (label) {
                 log("Event: click on payment option label/container");
                 setTimeout(handlePaymentOptionChange, 100);
+                return;
+            }
+            // Custom theme: detect clicks on payment tab links (<a> inside nav-tab-payment)
+            var paymentTab = e.target.closest
+                ? e.target.closest(
+                      "#nav-tab-payment .nav-link, .payments .nav-link",
+                  )
+                : null;
+            if (paymentTab) {
+                log(
+                    "Event: click on payment tab link",
+                    paymentTab.id || paymentTab.className,
+                );
+                setTimeout(handlePaymentOptionChange, 100);
             }
             return;
         }
         log("Event: click on radio", radio.id);
         setTimeout(handlePaymentOptionChange, 50);
     });
+
+    // Custom theme: observe the hidden payment_method input for value changes
+    // (setPayment() via onclick doesn't fire 'change' on hidden inputs)
+    (function observePaymentMethodInput() {
+        var pmInput =
+            document.getElementById("payment_method") ||
+            document.querySelector('input[name="payment_method"]');
+        if (!pmInput) return;
+        var lastValue = pmInput.value;
+        // Use MutationObserver on attribute changes
+        if (typeof MutationObserver !== "undefined") {
+            var observer = new MutationObserver(function () {
+                if (pmInput.value !== lastValue) {
+                    lastValue = pmInput.value;
+                    log(
+                        "MutationObserver: payment_method changed to",
+                        lastValue,
+                    );
+                    setTimeout(handlePaymentOptionChange, 50);
+                }
+            });
+            observer.observe(pmInput, {
+                attributes: true,
+                attributeFilter: ["value"],
+            });
+        }
+        // Also poll — setAttribute doesn't always trigger MutationObserver for .value
+        setInterval(function () {
+            if (pmInput.value !== lastValue) {
+                lastValue = pmInput.value;
+                log("Poll: payment_method changed to", lastValue);
+                setTimeout(handlePaymentOptionChange, 50);
+            }
+        }, 500);
+    })();
 
     // Check on DOM ready if Paypercut is already selected (e.g. only payment option, or back-button)
     function initCheck() {
