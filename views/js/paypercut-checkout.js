@@ -8,7 +8,7 @@
  *
  * @author    Paypercut <support@paypercut.io>
  * @copyright Paypercut
- * @license   AFL-3.0
+ * @license   https://mit-license.org ( MIT )
  */
 (function () {
     "use strict";
