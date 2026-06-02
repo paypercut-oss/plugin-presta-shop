@@ -525,18 +525,75 @@ class Paypercut extends PaymentModule
         // Build line items using price_data structure per API spec
         $currencyCode = strtoupper($currency->iso_code);
         $lineItems = array();
+        $lineItemsTotal = 0;
         foreach ($cart->getProducts() as $product) {
+            $unitAmount = (int) round($product['price_wt'] * 100);
+            $quantity = (int) $product['cart_quantity'];
             $lineItems[] = array(
-                'quantity' => (int) $product['cart_quantity'],
+                'quantity' => $quantity,
                 'price_data' => array(
                     'currency' => $currencyCode,
-                    'unit_amount' => (int) round($product['price_wt'] * 100),
+                    'unit_amount' => $unitAmount,
                     'type' => 'one_time',
                     'product_data' => array(
                         'name' => $product['name'],
                     ),
                 ),
             );
+            $lineItemsTotal += $unitAmount * $quantity;
+        }
+
+        $shippingAmount = (int) round($cart->getOrderTotal(true, Cart::ONLY_SHIPPING) * 100);
+        if ($shippingAmount > 0) {
+            $lineItems[] = array(
+                'quantity' => 1,
+                'price_data' => array(
+                    'currency' => $currencyCode,
+                    'unit_amount' => $shippingAmount,
+                    'type' => 'one_time',
+                    'product_data' => array(
+                        'name' => $this->l('Delivery'),
+                    ),
+                ),
+            );
+            $lineItemsTotal += $shippingAmount;
+        }
+
+        if (defined('Cart::ONLY_WRAPPING')) {
+            $wrappingAmount = (int) round($cart->getOrderTotal(true, Cart::ONLY_WRAPPING) * 100);
+            if ($wrappingAmount > 0) {
+                $lineItems[] = array(
+                    'quantity' => 1,
+                    'price_data' => array(
+                        'currency' => $currencyCode,
+                        'unit_amount' => $wrappingAmount,
+                        'type' => 'one_time',
+                        'product_data' => array(
+                            'name' => $this->l('Gift wrapping'),
+                        ),
+                    ),
+                );
+                $lineItemsTotal += $wrappingAmount;
+            }
+        }
+
+        $lineItemsDelta = $totalAmount - $lineItemsTotal;
+        if ($lineItemsDelta > 0) {
+            $lineItems[] = array(
+                'quantity' => 1,
+                'price_data' => array(
+                    'currency' => $currencyCode,
+                    'unit_amount' => $lineItemsDelta,
+                    'type' => 'one_time',
+                    'product_data' => array(
+                        'name' => $this->l('Order adjustment'),
+                    ),
+                ),
+            );
+        } elseif ($lineItemsDelta < 0) {
+            // Paypercut derives checkout amount from line_items; do not risk overcharging
+            // when cart rules or rounding make the detailed lines exceed PrestaShop's total.
+            $lineItems = array();
         }
 
         $successUrlParams = array(
