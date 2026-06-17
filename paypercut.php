@@ -42,8 +42,6 @@ class Paypercut extends PaymentModule
         'displayAdminOrderMainBottom',
         'displayOrderConfirmation',
         'displayOrderDetail',
-        'displayCustomerAccount',
-        'actionPaymentCCAdd',
         'actionObjectShopAddAfter',
         'displayBackOfficeHeader',
     );
@@ -71,7 +69,7 @@ class Paypercut extends PaymentModule
     {
         $this->name = 'paypercut';
         $this->tab = 'payments_gateways';
-        $this->version = '1.0.0';
+        $this->version = '1.0.1';
         $this->author = 'Paypercut';
         $this->need_instance = 1;
         $this->bootstrap = true;
