@@ -69,7 +69,7 @@ class Paypercut extends PaymentModule
     {
         $this->name = 'paypercut';
         $this->tab = 'payments_gateways';
-        $this->version = '1.0.1';
+        $this->version = '1.0.8';
         $this->author = 'Paypercut';
         $this->need_instance = 1;
         $this->bootstrap = true;
@@ -664,6 +664,17 @@ class Paypercut extends PaymentModule
         if ($locale) {
             $payload['locale'] = $locale;
         }
+
+        // Platform metadata
+        $payload['metadata'] = array(
+            'platform'                     => 'prestashop',
+            'platform_version'             => _PS_VERSION_,
+            'plugin_version'               => $this->version,
+            'php_version'                  => PHP_VERSION,
+            'site_url'                     => Tools::getShopDomainSsl(true),
+            'paypercut_checkout_mode'      => $uiMode,
+            'paypercut_checkout_operation' => 'payment',
+        );
 
         return $payload;
     }
