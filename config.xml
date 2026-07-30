@@ -2,7 +2,7 @@
 <module>
     <name>paypercut</name>
     <displayName><![CDATA[Paypercut Payments]]></displayName>
-    <version><![CDATA[1.0.8]]></version>
+    <version><![CDATA[1.0.9]]></version>
     <description><![CDATA[Accept payments via Paypercut - Cards, Google Pay, Apple Pay and more.]]></description>
     <author><![CDATA[Paypercut]]></author>
     <tab><![CDATA[payments_gateways]]></tab>
