@@ -69,7 +69,7 @@ class Paypercut extends PaymentModule
     {
         $this->name = 'paypercut';
         $this->tab = 'payments_gateways';
-        $this->version = '1.0.9';
+        $this->version = '1.2.18';
         $this->author = 'Paypercut';
         $this->need_instance = 1;
         $this->bootstrap = true;
