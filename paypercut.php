@@ -520,41 +520,73 @@ class Paypercut extends PaymentModule
         $customer = new Customer($cart->id_customer);
         $totalAmount = (int) round($cart->getOrderTotal(true, Cart::BOTH) * 100);
 
-        // Build line items using price_data structure per API spec
+        // Build line items using price_data structure per API spec, with a blended
+        // tax_rates_data entry per line when the product carries tax.
         $currencyCode = strtoupper($currency->iso_code);
         $lineItems = array();
         $lineItemsTotal = 0;
         foreach ($cart->getProducts() as $product) {
             $unitAmount = (int) round($product['price_wt'] * 100);
             $quantity = (int) $product['cart_quantity'];
-            $lineItems[] = array(
+
+            $taxRateData = null;
+            $unitPriceExclTax = (float) $product['price'];
+            $unitPriceInclTax = (float) $product['price_wt'];
+            if ($unitPriceExclTax > 0 && $unitPriceInclTax > $unitPriceExclTax) {
+                $taxPercentage = (($unitPriceInclTax - $unitPriceExclTax) / $unitPriceExclTax) * 100;
+                // The API rejects a percentage outside 0-100; fall back to unspecified
+                // tax_behavior for that line rather than let a single item break checkout.
+                if ($taxPercentage <= 100) {
+                    $taxRateData = array(
+                        'display_name' => $this->l('Tax'),
+                        'percentage' => number_format($taxPercentage, 2, '.', ''),
+                        'inclusive' => true,
+                    );
+                }
+            }
+
+            $lineItem = array(
                 'quantity' => $quantity,
                 'price_data' => array(
                     'currency' => $currencyCode,
                     'unit_amount' => $unitAmount,
                     'type' => 'one_time',
+                    'tax_behavior' => null === $taxRateData ? 'unspecified' : 'inclusive',
                     'product_data' => array(
                         'name' => $product['name'],
                     ),
                 ),
             );
+
+            if (null !== $taxRateData) {
+                $lineItem['tax_rates_data'] = array($taxRateData);
+            }
+
+            $lineItems[] = $lineItem;
             $lineItemsTotal += $unitAmount * $quantity;
         }
 
+        // Shipping is sent via shipping_options (not as a line item) so the checkout UI
+        // renders it in its own row, matching the WooCommerce/Magento integrations.
         $shippingAmount = (int) round($cart->getOrderTotal(true, Cart::ONLY_SHIPPING) * 100);
+        $shippingOptions = array();
         if ($shippingAmount > 0) {
-            $lineItems[] = array(
-                'quantity' => 1,
-                'price_data' => array(
-                    'currency' => $currencyCode,
-                    'unit_amount' => $shippingAmount,
-                    'type' => 'one_time',
-                    'product_data' => array(
-                        'name' => $this->l('Delivery'),
+            $carrier = new Carrier((int) $cart->id_carrier);
+            $shippingLabel = (Validate::isLoadedObject($carrier) && $carrier->name)
+                ? $carrier->name
+                : $this->l('Shipping');
+
+            $shippingOptions[] = array(
+                'shipping_rate_data' => array(
+                    'display_name' => $shippingLabel,
+                    'type' => 'fixed_amount',
+                    'fixed_amount' => array(
+                        'amount' => $shippingAmount,
+                        'currency' => $currencyCode,
                     ),
+                    'tax_behavior' => 'inclusive',
                 ),
             );
-            $lineItemsTotal += $shippingAmount;
         }
 
         if (defined('Cart::ONLY_WRAPPING')) {
@@ -575,7 +607,7 @@ class Paypercut extends PaymentModule
             }
         }
 
-        $lineItemsDelta = $totalAmount - $lineItemsTotal;
+        $lineItemsDelta = $totalAmount - $shippingAmount - $lineItemsTotal;
         if ($lineItemsDelta > 0) {
             $lineItems[] = array(
                 'quantity' => 1,
@@ -589,9 +621,11 @@ class Paypercut extends PaymentModule
                 ),
             );
         } elseif ($lineItemsDelta < 0) {
-            // Paypercut derives checkout amount from line_items; do not risk overcharging
-            // when cart rules or rounding make the detailed lines exceed PrestaShop's total.
+            // Paypercut derives checkout amount from line_items/shipping_options; do not risk
+            // overcharging when cart rules or rounding make the detailed lines exceed
+            // PrestaShop's total. Drop both so 'amount' alone drives the checkout.
             $lineItems = array();
+            $shippingOptions = array();
         }
 
         $successUrlParams = array(
@@ -657,6 +691,11 @@ class Paypercut extends PaymentModule
         // Line items
         if (!empty($lineItems)) {
             $payload['line_items'] = $lineItems;
+        }
+
+        // Shipping options
+        if (!empty($shippingOptions)) {
+            $payload['shipping_options'] = $shippingOptions;
         }
 
         // Locale
