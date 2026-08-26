@@ -154,10 +154,21 @@
             }
         }
 
-        function request(action, onDone) {
-            fetch(url + "&action=" + encodeURIComponent(action), {
-                headers: { Accept: "application/json" },
-            })
+        function request(action, onDone, write) {
+            // Minting and revoking a credential are side effects, so they travel
+            // as POST; only the poll is a GET.
+            var options = write
+                ? {
+                      method: "POST",
+                      headers: {
+                          Accept: "application/json",
+                          "Content-Type": "application/x-www-form-urlencoded",
+                      },
+                      body: "action=" + encodeURIComponent(action),
+                  }
+                : { headers: { Accept: "application/json" } };
+
+            fetch(write ? url : url + "&action=" + encodeURIComponent(action), options)
                 .then(function (response) {
                     return response.json();
                 })
@@ -299,7 +310,7 @@
                     } else if (data && data.error) {
                         show(data.error, "error");
                     }
-                });
+                }, true);
 
                 return;
             }
@@ -346,7 +357,7 @@
 
                     // A rejected start writes a `failed` record, so re-read it.
                     poll();
-                });
+                }, true);
             });
         }
 

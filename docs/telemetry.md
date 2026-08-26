@@ -195,22 +195,28 @@ Two controls, in this order:
    constructor; the two snapshot constructors iterate their *own* declared
    schema and read keys out of the caller's array, never the reverse.
 2. **The deny assertion is the safety net.** `PaypercutTelemetryQueue::append()`
-   screens `attrs` and `error` (two levels deep) for denied field names, denied
-   value shapes, a Luhn-valid PAN, and the store's actual credentials — and
-   **drops the whole event** rather than redacting a field. A field that trips
-   it means the event was assembled wrongly, so the rest of it cannot be trusted
-   either. The audit line records the event name only.
+   screens the **whole envelope** as it will be serialised — correlation fields
+   included, two levels deep — for denied field names, denied value shapes, a
+   Luhn-valid PAN, and the store's actual credentials, whole or clipped by the
+   byte clamp. It **drops the whole event** rather than redacting a field: a
+   field that trips it means the event was assembled wrongly, so the rest of it
+   cannot be trusted either. The audit line records the event name only. Screen
+   the envelope, never a named subset — `about()` writes top-level siblings of
+   `attrs` from upstream webhook JSON.
 
 `PaypercutTelemetrySession::credentials()` must enumerate every
 credential-bearing setting: comparing a value against the real secret is the
 only screen that catches a format nobody anticipated. **A future gateway adding
 its own credential setting silently weakens it** — add the new key there.
 
-Upstream prose is dropped wholesale: `PaypercutTelemetryEvent::apiFailure()`
-deletes `error.message` because the platform quotes submitted input back inside
-it (a rejected key arrives in the message). `api_code`, `api_param`, `trace_id`
-and `error.type` carry the diagnosis instead. A message this module authored
-itself stays.
+Upstream prose is dropped wholesale: no named constructor copies a
+`Throwable::getMessage()` onto the wire. The platform quotes submitted input
+back inside it (a rejected key arrives in the message), and
+`PrestaShopDatabaseException` inlines the failing SQL and the database
+`user@host` whenever `_PS_DEBUG_SQL_` is on — the state a store under a debug
+session is in. `error.type`, `error.stack`, `origin`, `api_code`, `api_param`
+and `trace_id` carry the diagnosis instead. A message this module authored
+itself, passed to `because()`, stays.
 
 ## Structural blind spots
 
@@ -247,9 +253,11 @@ exist.
 
 Set **Environment** on the module's API Configuration tab. Both the payment API
 and the telemetry edge follow it. `PAYPERCUT_TELEMETRY_BASE_URI` may be defined
-in `config/defines.inc.php` to retarget the edge alone; it is ignored when the
-environment is `production`, so a leftover debug constant cannot retarget a live
-store.
+in `config/defines.inc.php` to retarget the edge alone; it applies on `dev` and
+`stage` only. On `production` it cannot retarget a live store, and on an
+unrecognised environment it must not manufacture an edge the mint host would not
+follow — that pairs a production token with a dev edge, which 401s and burns the
+merchant's consent with no re-mint.
 
 ## Tests
 

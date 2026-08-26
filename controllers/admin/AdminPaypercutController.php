@@ -565,12 +565,12 @@ class AdminPaypercutController extends ModuleAdminController
      * Mint a telemetry token and publish a session.
      *
      * The employee's identity and the CSRF token were both checked by
-     * AdminController::init() before initContent() ran; this re-checks the
-     * employee because everything below writes.
+     * AdminController::init() before initContent() ran; this additionally
+     * demands edit access on the module tab, because everything below writes.
      */
     private function ajaxStartDebugSession()
     {
-        if (!$this->debugSessionAllowed()) {
+        if (!$this->debugSessionAllowed(true)) {
             return;
         }
 
@@ -744,7 +744,7 @@ class AdminPaypercutController extends ModuleAdminController
      */
     private function ajaxStopDebugSession()
     {
-        if (!$this->debugSessionAllowed()) {
+        if (!$this->debugSessionAllowed(true)) {
             return;
         }
 
@@ -807,17 +807,28 @@ class AdminPaypercutController extends ModuleAdminController
     }
 
     /**
+     * @param bool $write  Starting or stopping a session, rather than reading one
+     *
      * @return bool  false when a response has already been sent
      */
-    private function debugSessionAllowed()
+    private function debugSessionAllowed($write = false)
     {
-        if (Validate::isLoadedObject($this->context->employee)) {
-            return true;
+        if (!Validate::isLoadedObject($this->context->employee)) {
+            $this->ajaxJson(array('error' => $this->module->l('Insufficient permissions.', 'AdminPaypercut')));
+
+            return false;
         }
 
-        $this->ajaxJson(array('error' => $this->module->l('Insufficient permissions.', 'AdminPaypercut')));
+        // Minting a telemetry credential is a write. init() has already checked
+        // that this employee may VIEW the module tab, which is a different
+        // permission and a much lower bar.
+        if ($write && empty($this->tabAccess['edit'])) {
+            $this->ajaxJson(array('error' => $this->module->l('You do not have permission to start or stop a debug session.', 'AdminPaypercut')));
 
-        return false;
+            return false;
+        }
+
+        return true;
     }
 
     /**
