@@ -31,7 +31,7 @@ function upgrade_module_1_3_0($module)
             `id_shop` INT(10) UNSIGNED NOT NULL DEFAULT 1,
             `date_upd` DATETIME NOT NULL,
             PRIMARY KEY (`id_paypercut_telemetry_store`),
-            UNIQUE KEY `name` (`name`),
+            UNIQUE KEY `name_shop` (`name`, `id_shop`),
             KEY `expires_at` (`expires_at`)
         ) ENGINE=' . _MYSQL_ENGINE_ . ' DEFAULT CHARSET=utf8mb4;'
     );

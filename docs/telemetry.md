@@ -67,8 +67,12 @@ diagnostics, which is the one failure mode a debug session cannot tolerate.
 | `paypercut_telemetry_inflight` | `paypercut_telemetry_store` | A batch taken but not yet settled |
 | `paypercut_telemetry_runtime` | `paypercut_telemetry_store` | Counters, backoff, last error |
 | `paypercut_telemetry_sent_log` | `paypercut_telemetry_store` | What the panel shows the merchant |
-| `paypercut_telemetry_start_lock` | `paypercut_telemetry_store` | `INSERT IGNORE` on a `UNIQUE` name |
+| `paypercut_telemetry_start_lock` | `paypercut_telemetry_store` | `INSERT IGNORE` on the `UNIQUE (name, id_shop)` key |
 | `paypercut_telemetry_flush_lock` | `paypercut_telemetry_store` | Same |
+
+Every row is keyed on `(name, id_shop)` and every read filters on the shop, so
+two shops on a multistore install cannot trample each other's token or queue —
+the session record in `Configuration` is shop-scoped the same way.
 
 Uninstalling calls `PaypercutTelemetrySession::end()` and then drops the table,
 so no key survives — the sent log included.

@@ -13,6 +13,10 @@
  * the whole configuration table once per request, so the storefront gate costs
  * nothing. The key is absent from the settings form, so a save cannot write it.
  *
+ * Every row is scoped to one shop, because the session record it belongs to is:
+ * on a multistore install two shops sharing a token row would trample each
+ * other's session.
+ *
  * @author    Paypercut <support@paypercut.io>
  * @copyright Paypercut
  * @license   https://mit-license.org ( MIT )
@@ -39,6 +43,7 @@ class PaypercutTelemetryStore
         $sql->select('payload, expires_at');
         $sql->from(self::TABLE);
         $sql->where('name = \'' . pSQL($name) . '\'');
+        $sql->where('id_shop = ' . (int) self::shopId());
 
         $row = Db::getInstance()->getRow($sql);
 
@@ -97,7 +102,7 @@ class PaypercutTelemetryStore
     {
         Db::getInstance()->delete(
             self::TABLE,
-            'name = \'' . pSQL($name) . '\''
+            'name = \'' . pSQL($name) . '\' AND id_shop = ' . (int) self::shopId()
         );
     }
 
@@ -215,6 +220,7 @@ class PaypercutTelemetryStore
         $sql->select('expires_at');
         $sql->from(self::TABLE);
         $sql->where('name = \'' . pSQL($name) . '\'');
+        $sql->where('id_shop = ' . (int) self::shopId());
 
         $expiresAt = Db::getInstance()->getValue($sql);
 
