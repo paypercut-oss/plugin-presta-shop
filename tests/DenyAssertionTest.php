@@ -111,3 +111,134 @@ $errorOnly = array(
 );
 Assert::same(0, count($method->invoke(null, array($errorOnly))), 'the screen covers error, not just attrs');
 Configuration::$values = array();
+
+// ── Regression: EVERY field on the wire is screened, not a hand-picked subset ──
+//
+// The screen used to name `attrs` and `error` only, so the correlation fields
+// about() writes — fed straight from upstream webhook JSON — carried a PAN or
+// the store's own API key to the edge untouched. This walks the envelope as it
+// will actually be serialised, so a field added later is covered on the day it
+// appears rather than the day someone remembers to widen the screen.
+
+/**
+ * @param array $node
+ * @param array $prefix
+ *
+ * @return array  One path per scalar leaf
+ */
+function paypercut_leaf_paths(array $node, array $prefix = array())
+{
+    $paths = array();
+
+    foreach ($node as $key => $value) {
+        $path = array_merge($prefix, array($key));
+
+        if (is_array($value)) {
+            $paths = array_merge($paths, paypercut_leaf_paths($value, $path));
+
+            continue;
+        }
+
+        $paths[] = $path;
+    }
+
+    return $paths;
+}
+
+/**
+ * @param array $node
+ * @param array $path
+ * @param mixed $value
+ *
+ * @return array
+ */
+function paypercut_set_path(array $node, array $path, $value)
+{
+    $key = array_shift($path);
+
+    if (empty($path)) {
+        $node[$key] = $value;
+
+        return $node;
+    }
+
+    $child = isset($node[$key]) && is_array($node[$key]) ? $node[$key] : array();
+    $node[$key] = paypercut_set_path($child, $path, $value);
+
+    return $node;
+}
+
+Configuration::$values[Paypercut::CONFIG_API_KEY] = 'sk_live_realsecret';
+Configuration::$values[Paypercut::CONFIG_WEBHOOK_SECRET] = 'XYZ-unguessable-webhook-secret';
+
+// One envelope carrying every shape a producer can put on the wire: correlation
+// fields, caller attrs, an error map and a nested stack.
+$wire = PaypercutTelemetryEvent::failure(
+    'webhook.error',
+    'http_500',
+    array('webhook' => 'payment.updated', 'http_status' => 500),
+    new RuntimeException('module blew up')
+)
+    ->because('threw RuntimeException')
+    ->about(array(
+        'payment_intent_id' => 'pi_9RTvK2',
+        'payment_id' => 'pay_9RTvK2',
+        'order_ref' => 'WC-2026/8891',
+    ))
+    ->envelope(1787250271);
+
+$wire['error']['stack'] = array('somemodule/some.php:12');
+
+Assert::same(1, count($method->invoke(null, array($wire))), 'the representative envelope is not over-screened');
+
+$leaves = paypercut_leaf_paths($wire);
+Assert::true(count($leaves) >= 9, 'the walk covers every field of a fully populated envelope');
+
+// Plus two fields nobody has declared yet: a new envelope key must be screened
+// the moment it exists, top level or nested.
+$leaves[] = array('future_field');
+$leaves[] = array('error', 'future_field');
+
+$canaries = array(
+    'a Luhn-valid PAN' => '4111111111111111',
+    'a spaced PAN' => '4111 1111 1111 1111',
+    'the store API key' => 'sk_live_realsecret',
+    'the store webhook secret' => 'XYZ-unguessable-webhook-secret',
+    'a bearer token' => 'eyJhbGciOiJSUzI1NiJ9.body',
+);
+
+foreach ($leaves as $path) {
+    foreach ($canaries as $label => $canary) {
+        $mutated = paypercut_set_path($wire, $path, $canary);
+
+        Assert::same(
+            0,
+            count($method->invoke(null, array($mutated))),
+            $label . ' at ' . implode('.', $path) . ' is denied'
+        );
+    }
+}
+
+// text() clamps to MAX_TEXT_BYTES before the screen ever sees the value, so a
+// secret straddling the cut reaches the assertion as a leading fragment.
+$clipped = PaypercutTelemetryEvent::text(str_repeat('x', 240) . 'sk_live_realsecret');
+Assert::true(
+    strpos($clipped, 'sk_live_realsecret') === false,
+    'the clamp really does cut the credential in half'
+);
+Assert::same(
+    0,
+    count($method->invoke(null, array(paypercut_set_path($wire, array('order_ref'), $clipped)))),
+    'a credential clipped by the byte clamp is still denied'
+);
+
+// Below MIN_SECRET_FRAGMENT a leading run is no longer a credential, and binning
+// events over six shared characters would cost more than it saves.
+$stub = PaypercutTelemetryEvent::text(str_repeat('x', 250) . 'sk_live_realsecret');
+Assert::same(
+    1,
+    count($method->invoke(null, array(paypercut_set_path($wire, array('order_ref'), $stub)))),
+    'a fragment too short to be a credential does not bin the event'
+);
+
+Configuration::$values = array();

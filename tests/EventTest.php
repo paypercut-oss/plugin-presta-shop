@@ -155,3 +155,57 @@ foreach (PaypercutTelemetryEvent::environmentModules($modules) as $event) {
 
 Assert::same(70, count($seen), 'every module appears exactly once across the chunks');
 Assert::same($modules, $seen, 'the inventory is carried intact');
+
+// A slug that trips the deny assertion costs one module, never the chunk: the
+// inventory is the one artefact whose only purpose is conflict diagnosis.
+$hostile = PaypercutTelemetryEvent::environmentModules(array(
+    'authorizeaim' => '3.0.0',
+    'ps_checkout' => '2.0',
+    'blockcart' => '1.0',
+));
+
+$inventory = $hostile[0]->envelope(1787250271);
+
+Assert::same(1, count($hostile), 'a small inventory is one chunk');
+Assert::false(isset($inventory['attrs']['authorizeaim']), 'the slug that trips the assertion is left out');
+Assert::same('2.0', $inventory['attrs']['ps_checkout'], 'its neighbours survive');
+Assert::same('1.0', $inventory['attrs']['blockcart'], 'the whole chunk is not binned');
+Assert::same(1, $inventory['attrs']['omitted'], 'the gap is reported rather than hidden');
+Assert::same(3, $inventory['attrs']['module_count'], 'module_count still names the true total');
+
+// ── Upstream exception prose never reaches the wire ──
+$platform = PaypercutTelemetryEvent::failure(
+    'webhook.error',
+    'http_500',
+    array(),
+    new RuntimeException("SQLSTATE[42S02]: SELECT * FROM ps_orders — user shopdb_7f@db-01.internal")
+)->envelope(1787250271);
+
+Assert::false(isset($platform['error']['message']), 'an exception message is not copied onto the wire');
+Assert::same('RuntimeException', $platform['error']['type'], 'the class carries the diagnosis instead');
+Assert::true(isset($platform['attrs']['origin']), 'the origin still attributes the failure');
+
+// ── MAX_ATTRS is a budget, not a suggestion ──
+$wide = array();
+for ($i = 0; $i < 16; ++$i) {
+    $wide['attr' . str_pad((string) $i, 2, '0', STR_PAD_LEFT)] = $i;
+}
+
+$capped = PaypercutTelemetryEvent::apiFailure(
+    'api.request_failed',
+    new PaypercutApiException('rejected', 401, array('error' => array('code' => 'token_invalid'), 'trace_id' => 'da74bc')),
+    $wide
+)->envelope(1787250271);
+
+Assert::same(
+    PaypercutTelemetryEvent::MAX_ATTRS,
+    count($capped['attrs']),
+    'merging the derived fields does not overrun the attribute budget'
+);
+Assert::same('token_invalid', $capped['attrs']['api_code'], 'the diagnosis outranks a caller attribute');
+Assert::same('da74bc', $capped['attrs']['trace_id'], 'the support reference survives the cap');
+Assert::same(401, $capped['attrs']['http_status'], 'the status survives the cap');
+
+// ── identifier() anchors at the true end of the string ──
+Assert::same('', PaypercutTelemetryEvent::identifier("ok_value\n"), 'a trailing newline is not identifier-shaped');
+Assert::same('ok_value', PaypercutTelemetryEvent::identifier('ok_value'), 'an ordinary identifier survives');

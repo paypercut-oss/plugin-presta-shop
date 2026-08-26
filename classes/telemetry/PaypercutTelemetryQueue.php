@@ -70,17 +70,12 @@ class PaypercutTelemetryQueue
         $safe = array();
 
         foreach ($envelopes as $envelope) {
-            // error is a top-level sibling of attrs, so it has to be named here
-            // or it bypasses the one gate every producer funnels through.
-            $screened = array();
-
-            foreach (array('attrs', 'error') as $field) {
-                if (isset($envelope[$field]) && is_array($envelope[$field])) {
-                    $screened[$field] = $envelope[$field];
-                }
-            }
-
-            if (PaypercutTelemetryEvent::isDenied($screened, $secrets)) {
+            // The WHOLE envelope, exactly as it will be serialised. attrs and
+            // error are not the only things on the wire: the correlation fields
+            // about() writes are top-level siblings fed from upstream webhook
+            // JSON, and any hand-picked subset stops covering whatever the next
+            // envelope field turns out to be.
+            if (PaypercutTelemetryEvent::isDenied($envelope, $secrets)) {
                 // The event name only — never the envelope.
                 PaypercutTelemetrySession::audit(
                     'Telemetry: event dropped by the deny assertion',

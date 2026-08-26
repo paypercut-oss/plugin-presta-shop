@@ -37,6 +37,9 @@ class PaypercutTelemetryEvent
 
     const MAX_STACK_FRAMES = 8;
 
+    /** Shortest leading run of a credential that still counts as carrying it. */
+    const MIN_SECRET_FRAGMENT = 12;
+
     /** Field names that must never appear in an event, whatever their value. */
     const DENIED_KEY_PATTERN = '/secret|token|password|credential|nonce|auth|_key$/i';
 
@@ -143,11 +146,16 @@ class PaypercutTelemetryEvent
         $event->error = array('code' => $cleanCode !== '' ? $cleanCode : 'unknown');
 
         if ($exception instanceof Throwable) {
+            // The message is the one string here this module did not author, and
+            // the platform puts store data in it: PrestaShopDatabaseException
+            // inlines the failing SQL and the database user@host whenever
+            // _PS_DEBUG_SQL_ is on, which is the state a store under a debug
+            // session is in. The class, the stack and the origin carry the
+            // diagnosis; a call site with prose of its own uses because().
             $event->error['type'] = self::shortClassName($exception);
-            $event->error['message'] = self::text($exception->getMessage());
             $event->error['stack'] = self::stack($exception);
 
-            $event->fields += self::origin(self::frameFiles($exception));
+            $event->withDerived(self::origin(self::frameFiles($exception)));
         }
 
         return $event;
@@ -166,9 +174,8 @@ class PaypercutTelemetryEvent
     {
         $event = self::failure($name, 'http_' . $exception->getStatusCode(), $attrs, $exception);
 
-        // The only string here this module does not author, and the platform
-        // quotes its input back — a rejected key arrives inside it. api_code
-        // and trace_id carry the diagnosis instead.
+        // Belt and braces: failure() no longer copies an exception message, and
+        // the platform quotes a rejected key back inside this one.
         unset($event->error['message']);
 
         $type = self::text($exception->getErrorType());
@@ -176,20 +183,22 @@ class PaypercutTelemetryEvent
             $event->error['type'] = $type;
         }
 
-        $structured = array(
+        $structured = array();
+
+        foreach (array(
             'api_code' => $exception->getErrorCode(),
             'api_param' => $exception->getParam(),
             'trace_id' => $exception->getTraceId(),
-        );
-
-        foreach ($structured as $key => $value) {
+        ) as $key => $value) {
             $clean = self::text((string) $value);
             if ($clean !== '') {
-                $event->fields[$key] = $clean;
+                $structured[$key] = $clean;
             }
         }
 
-        $event->fields['http_status'] = $exception->getStatusCode();
+        $structured['http_status'] = $exception->getStatusCode();
+
+        $event->withDerived($structured);
 
         return $event;
     }
@@ -211,7 +220,7 @@ class PaypercutTelemetryEvent
     {
         $event = new self('php.fatal', array('level' => (int) $level));
 
-        $event->fields += self::origin(array($file));
+        $event->withDerived(self::origin(array($file)));
 
         $event->error = array(
             'code' => 'php_fatal',
@@ -297,7 +306,8 @@ class PaypercutTelemetryEvent
     public static function environmentModules(array $modules)
     {
         $total = count($modules);
-        $chunks = array_chunk($modules, self::MAX_ATTRS - 2, true);
+        // Three reserved slots: module_count, chunk, and omitted.
+        $chunks = array_chunk($modules, self::MAX_ATTRS - 3, true);
         $events = array();
 
         foreach ($chunks as $index => $chunk) {
@@ -306,11 +316,27 @@ class PaypercutTelemetryEvent
                 'chunk' => (int) $index + 1,
             );
 
+            $omitted = 0;
+
             foreach ($chunk as $slug => $version) {
                 $key = self::text((string) $slug);
-                if ($key !== '') {
-                    $fields[$key] = self::text((string) $version);
+                $value = self::text((string) $version);
+
+                // A merchant slug becomes an attribute KEY here, and one slug
+                // that trips the deny assertion (Authorize.net ships
+                // "authorizeaim") would otherwise bin the whole chunk — the one
+                // artefact whose only purpose is conflict diagnosis.
+                if ($key === '' || self::isDenied(array($key => $value))) {
+                    ++$omitted;
+
+                    continue;
                 }
+
+                $fields[$key] = $value;
+            }
+
+            if ($omitted > 0) {
+                $fields['omitted'] = $omitted;
             }
 
             $events[] = new self('environment.plugins', $fields);
@@ -460,9 +486,44 @@ class PaypercutTelemetryEvent
             // credentials is not. This catches a secret in a format nobody
             // anticipated, including one a future Paypercut release introduces.
             foreach ($secrets as $secret) {
-                if (is_string($secret) && $secret !== '' && strpos($value, $secret) !== false) {
+                if (self::carriesSecret($value, $secret)) {
                     return true;
                 }
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Does this value carry the store's credential, whole or clipped?
+     *
+     * text() clamps every string to MAX_TEXT_BYTES before the assertion ever
+     * sees it, so a secret straddling the cut survives only as the value's
+     * tail — where a plain substring comparison against the whole secret misses
+     * it. Anything shorter than MIN_SECRET_FRAGMENT is not enough of a
+     * credential to be worth the false positives.
+     *
+     * @param string $value
+     * @param mixed  $secret
+     *
+     * @return bool
+     */
+    private static function carriesSecret($value, $secret)
+    {
+        if (!is_string($secret) || $secret === '') {
+            return false;
+        }
+
+        if (strpos($value, $secret) !== false) {
+            return true;
+        }
+
+        $length = min(strlen($value), strlen($secret) - 1);
+
+        for ($n = $length; $n >= self::MIN_SECRET_FRAGMENT; --$n) {
+            if (substr($value, -$n) === substr($secret, 0, $n)) {
+                return true;
             }
         }
 
@@ -568,7 +629,9 @@ class PaypercutTelemetryEvent
      */
     public static function identifier($value)
     {
-        return preg_match('/^[A-Za-z0-9_.:-]{1,64}$/', (string) $value) ? (string) $value : '';
+        // \z and /D, not $: PCRE's $ accepts a trailing newline, and these
+        // values arrive from upstream JSON.
+        return preg_match('/^[A-Za-z0-9_.:-]{1,64}\z/D', (string) $value) ? (string) $value : '';
     }
 
     /**
@@ -784,6 +847,28 @@ class PaypercutTelemetryEvent
         }
 
         return $fields;
+    }
+
+    /**
+     * Merge fields this class derived, without breaking the attribute budget.
+     *
+     * Derived fields outrank the caller's: over MAX_ATTRS the edge keeps the
+     * first attributes in sorted key order and drops the rest, which is exactly
+     * how origin / api_code / trace_id — the diagnosis — went missing.
+     *
+     * @param array $derived
+     *
+     * @return PaypercutTelemetryEvent
+     */
+    private function withDerived(array $derived)
+    {
+        $merged = $derived + $this->fields;
+
+        $this->fields = count($merged) > self::MAX_ATTRS
+            ? array_slice($merged, 0, self::MAX_ATTRS, true)
+            : $merged;
+
+        return $this;
     }
 
     /**
