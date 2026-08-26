@@ -110,9 +110,11 @@ class PaypercutEnvironment
     {
         $environment = self::normalize($environment);
 
-        // A leftover debug constant must not be able to retarget a live store's
-        // telemetry, especially since the mint host would not follow it.
-        if (defined('PAYPERCUT_TELEMETRY_BASE_URI') && $environment !== self::PRODUCTION) {
+        // Named environments only. A leftover debug constant must not retarget a
+        // live store's telemetry, and must not give an unknown environment an
+        // edge the mint host would not follow either — that pairs a production
+        // token with a dev edge, which 401s and burns the merchant's consent.
+        if (defined('PAYPERCUT_TELEMETRY_BASE_URI') && in_array($environment, array('dev', 'stage'), true)) {
             return self::allowedPaypercutBase((string) constant('PAYPERCUT_TELEMETRY_BASE_URI'));
         }
 

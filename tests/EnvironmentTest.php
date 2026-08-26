@@ -78,3 +78,28 @@ foreach (PaypercutEnvironment::API_BASE_URIS as $url) {
 foreach (PaypercutEnvironment::TELEMETRY_BASE_URIS as $url) {
     Assert::same($url, PaypercutEnvironment::allowedPaypercutBase($url), 'the edge map entry ' . $url . ' is allow-listed');
 }
+
+// ── The host-side override: named non-production environments only ──
+// Defined here rather than in the bootstrap so the assertions above run against
+// a released build's behaviour first.
+define('PAYPERCUT_TELEMETRY_BASE_URI', 'https://telemetry.dev.paypercut.net/');
+
+foreach (array('', 'garbage', 'local', 'staging') as $environment) {
+    Assert::same(
+        '',
+        PaypercutEnvironment::telemetryBaseUri($environment),
+        'the override does not hand "' . $environment . '" an edge the mint host would not follow'
+    );
+}
+
+Assert::same(
+    'https://telemetry.paypercut.io/',
+    PaypercutEnvironment::telemetryBaseUri('production'),
+    'the override cannot retarget a live store'
+);
+
+Assert::same(
+    'https://telemetry.dev.paypercut.net/',
+    PaypercutEnvironment::telemetryBaseUri('dev'),
+    'the override applies on dev'
+);
