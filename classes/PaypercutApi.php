@@ -14,21 +14,29 @@ if (!defined('_PS_VERSION_')) {
     exit;
 }
 
+require_once dirname(__FILE__) . '/telemetry/bootstrap.php';
+
 class PaypercutApi
 {
-    const BASE_URL = 'https://api.paypercut.io';
     const TIMEOUT = 30;
     const CONNECT_TIMEOUT = 10;
 
     /** @var string */
     private $apiKey;
 
+    /** @var string Trailing-slashed base URI for this store's environment */
+    private $baseUrl;
+
     /**
-     * @param string $apiKey
+     * @param string      $apiKey
+     * @param string|null $environment  Overrides this store's stored environment
      */
-    public function __construct($apiKey)
+    public function __construct($apiKey, $environment = null)
     {
         $this->apiKey = $apiKey;
+        $this->baseUrl = PaypercutEnvironment::apiBaseUri(
+            $environment === null ? PaypercutEnvironment::current() : $environment
+        );
     }
 
     // ──────────────────────────────────────────────
@@ -44,7 +52,7 @@ class PaypercutApi
      */
     public function createCheckout(array $data)
     {
-        return $this->post('/v1/checkouts', $data);
+        return $this->post('/v1/checkouts', $data, 'checkout_create');
     }
 
     /**
@@ -56,7 +64,7 @@ class PaypercutApi
      */
     public function getCheckout($checkoutId)
     {
-        return $this->get('/v1/checkouts/' . $checkoutId);
+        return $this->get('/v1/checkouts/' . $checkoutId, 'checkout_lookup');
     }
 
     // ──────────────────────────────────────────────
@@ -72,7 +80,7 @@ class PaypercutApi
      */
     public function getPayment($paymentId)
     {
-        return $this->get('/v1/payments/' . $paymentId);
+        return $this->get('/v1/payments/' . $paymentId, 'payment_lookup');
     }
 
     // ──────────────────────────────────────────────
@@ -88,7 +96,7 @@ class PaypercutApi
      */
     public function capturePaymentIntent($paymentIntentId)
     {
-        return $this->post('/v1/payment_intents/' . $paymentIntentId . '/confirm', array());
+        return $this->post('/v1/payment_intents/' . $paymentIntentId . '/confirm', array(), 'payment_intent_confirm');
     }
 
     /**
@@ -100,7 +108,7 @@ class PaypercutApi
      */
     public function cancelPaymentIntent($paymentIntentId)
     {
-        return $this->post('/v1/payment_intents/' . $paymentIntentId . '/cancel', array());
+        return $this->post('/v1/payment_intents/' . $paymentIntentId . '/cancel', array(), 'payment_intent_cancel');
     }
 
     // ──────────────────────────────────────────────
@@ -116,7 +124,7 @@ class PaypercutApi
      */
     public function createRefund(array $data)
     {
-        return $this->post('/v1/refunds', $data);
+        return $this->post('/v1/refunds', $data, 'refund_create');
     }
 
     /**
@@ -128,7 +136,7 @@ class PaypercutApi
      */
     public function getRefund($refundId)
     {
-        return $this->get('/v1/refunds/' . $refundId);
+        return $this->get('/v1/refunds/' . $refundId, 'refund_lookup');
     }
 
     // ──────────────────────────────────────────────
@@ -144,7 +152,7 @@ class PaypercutApi
      */
     public function createCustomer(array $data)
     {
-        return $this->post('/v1/customers', $data);
+        return $this->post('/v1/customers', $data, 'customer_create');
     }
 
     /**
@@ -156,7 +164,7 @@ class PaypercutApi
      */
     public function getCustomer($customerId)
     {
-        return $this->get('/v1/customers/' . $customerId);
+        return $this->get('/v1/customers/' . $customerId, 'customer_lookup');
     }
 
     /**
@@ -169,7 +177,7 @@ class PaypercutApi
      */
     public function updateCustomer($customerId, array $data)
     {
-        return $this->patch('/v1/customers/' . $customerId, $data);
+        return $this->patch('/v1/customers/' . $customerId, $data, 'customer_update');
     }
 
     // ──────────────────────────────────────────────
@@ -183,7 +191,7 @@ class PaypercutApi
      */
     public function listWebhooks()
     {
-        return $this->get('/v1/webhooks');
+        return $this->get('/v1/webhooks', 'webhook_list');
     }
 
     /**
@@ -195,7 +203,7 @@ class PaypercutApi
      */
     public function createWebhook(array $data)
     {
-        return $this->post('/v1/webhooks', $data);
+        return $this->post('/v1/webhooks', $data, 'webhook_create');
     }
 
     /**
@@ -207,7 +215,7 @@ class PaypercutApi
      */
     public function deleteWebhook($webhookId)
     {
-        return $this->delete('/v1/webhooks/' . $webhookId);
+        return $this->delete('/v1/webhooks/' . $webhookId, 'webhook_delete');
     }
 
     /**
@@ -219,7 +227,7 @@ class PaypercutApi
      */
     public function getWebhook($webhookId)
     {
-        return $this->get('/v1/webhooks/' . $webhookId);
+        return $this->get('/v1/webhooks/' . $webhookId, 'webhook_lookup');
     }
 
     // ──────────────────────────────────────────────
@@ -233,7 +241,7 @@ class PaypercutApi
      */
     public function listPaymentMethodDomains()
     {
-        return $this->get('/v1/payment_method_domains');
+        return $this->get('/v1/payment_method_domains', 'payment_domain_list');
     }
 
     /**
@@ -245,7 +253,7 @@ class PaypercutApi
      */
     public function registerPaymentMethodDomain($domainName)
     {
-        return $this->post('/v1/payment_method_domains', array('domain_name' => $domainName));
+        return $this->post('/v1/payment_method_domains', array('domain_name' => $domainName), 'payment_domain_register');
     }
 
     // ──────────────────────────────────────────────
@@ -259,7 +267,7 @@ class PaypercutApi
      */
     public function testConnection()
     {
-        return $this->get('/v1/account');
+        return $this->get('/v1/account', 'connection_test');
     }
 
     /**
@@ -285,44 +293,48 @@ class PaypercutApi
 
     /**
      * @param string $endpoint
+     * @param string $context   Fixed phrase naming the call, never the path
      *
      * @return array|null
      */
-    private function get($endpoint)
+    private function get($endpoint, $context)
     {
-        return $this->request('GET', $endpoint);
+        return $this->request('GET', $endpoint, null, $context);
     }
 
     /**
      * @param string $endpoint
      * @param array  $data
+     * @param string $context
      *
      * @return array
      */
-    private function post($endpoint, array $data)
+    private function post($endpoint, array $data, $context)
     {
-        return $this->request('POST', $endpoint, $data);
+        return $this->request('POST', $endpoint, $data, $context);
     }
 
     /**
      * @param string $endpoint
      * @param array  $data
+     * @param string $context
      *
      * @return array|null
      */
-    private function patch($endpoint, array $data)
+    private function patch($endpoint, array $data, $context)
     {
-        return $this->request('PATCH', $endpoint, $data);
+        return $this->request('PATCH', $endpoint, $data, $context);
     }
 
     /**
      * @param string $endpoint
+     * @param string $context
      *
      * @return array|null
      */
-    private function delete($endpoint)
+    private function delete($endpoint, $context)
     {
-        return $this->request('DELETE', $endpoint);
+        return $this->request('DELETE', $endpoint, null, $context);
     }
 
     /**
@@ -331,14 +343,16 @@ class PaypercutApi
      * @param string     $method
      * @param string     $endpoint
      * @param array|null $data
+     * @param string     $context
      *
      * @return array
      *
-     * @throws Exception on cURL error or non-2xx response
+     * @throws PaypercutApiException on cURL error or non-2xx response
      */
-    private function request($method, $endpoint, $data = null)
+    private function request($method, $endpoint, $data = null, $context = 'api')
     {
-        $url = self::BASE_URL . $endpoint;
+        $url = rtrim($this->baseUrl, '/') . $endpoint;
+        $startedAt = microtime(true);
 
         $ch = curl_init();
         curl_setopt($ch, CURLOPT_URL, $url);
@@ -350,7 +364,7 @@ class PaypercutApi
         $headers = array(
             'Authorization: Bearer ' . $this->apiKey,
             'Content-Type: application/json',
-            'User-Agent: Paypercut-PrestaShop/1.0.0',
+            'User-Agent: Paypercut-PrestaShop/' . Paypercut::VERSION,
         );
 
         curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
@@ -371,20 +385,53 @@ class PaypercutApi
 
         $response = curl_exec($ch);
         $curlError = curl_error($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $connectTime = (float) curl_getinfo($ch, CURLINFO_CONNECT_TIME);
+        $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
         curl_close($ch);
 
+        $durationMs = (int) round((microtime(true) - $startedAt) * 1000);
+
         if ($curlError) {
-            throw new Exception('Paypercut API connection error: ' . $curlError);
+            // A connect failure that took the full timeout is a network black
+            // hole; one that returned at once is DNS or a refused port. Both are
+            // distinct from a server that answered badly.
+            $reason = $connectTime > 0 ? 'transport' : 'connect';
+            $this->reportFailure($context, $reason, $durationMs);
+
+            throw new PaypercutApiException('Paypercut API connection error: ' . $curlError, 0);
         }
 
         if ($httpCode == 0) {
-            throw new Exception('Paypercut API timeout: no response received.');
+            $this->reportFailure($context, 'transport', $durationMs);
+
+            throw new PaypercutApiException('Paypercut API timeout: no response received.', 0);
         }
 
         $result = json_decode($response, true);
 
         if ($httpCode >= 200 && $httpCode < 300) {
+            if ($result === null && trim((string) $response) !== '') {
+                // Byte count only — never the body.
+                PaypercutTelemetryRecorder::record(
+                    PaypercutTelemetryEvent::failure('api.response_unparsable', 'decode_failed', array(
+                        'api_context' => $context,
+                        'body_bytes' => strlen((string) $response),
+                    ))
+                );
+            }
+
+            if ($durationMs >= PaypercutTelemetrySession::SLOW_REQUEST_MS) {
+                // Only slow calls are timed as events: timing every call would
+                // fill the queue with the requests nobody is investigating.
+                PaypercutTelemetryRecorder::record(
+                    PaypercutTelemetryEvent::of('api.request_slow', array(
+                        'api_context' => $context,
+                        'method' => $method,
+                        'duration_ms' => $durationMs,
+                    ))
+                );
+            }
+
             return $result ? $result : array();
         }
 
@@ -396,6 +443,38 @@ class PaypercutApi
             $errorMessage = $result['message'];
         }
 
-        throw new Exception($errorMessage);
+        $exception = new PaypercutApiException(
+            $errorMessage,
+            $httpCode,
+            is_array($result) ? $result : array()
+        );
+
+        PaypercutTelemetryRecorder::record(
+            PaypercutTelemetryEvent::apiFailure('api.request_failed', $exception, array(
+                'api_context' => $context,
+                'duration_ms' => $durationMs,
+                'body_parsable' => is_array($result),
+            ))
+        );
+
+        throw $exception;
+    }
+
+    /**
+     * A transport failure carries no status and no structured body, so it is
+     * reported under its own reason code rather than as an HTTP failure.
+     *
+     * @param string $context
+     * @param string $reason
+     * @param int    $durationMs
+     */
+    private function reportFailure($context, $reason, $durationMs)
+    {
+        PaypercutTelemetryRecorder::record(
+            PaypercutTelemetryEvent::failure('api.request_failed', $reason, array(
+                'api_context' => $context,
+                'duration_ms' => $durationMs,
+            ))
+        );
     }
 }

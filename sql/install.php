@@ -89,6 +89,18 @@ $sql[] = 'CREATE TABLE IF NOT EXISTS `' . _DB_PREFIX_ . 'paypercut_webhook_log` 
     KEY `event_type` (`event_type`)
 ) ENGINE=' . _MYSQL_ENGINE_ . ' DEFAULT CHARSET=utf8mb4;';
 
+$sql[] = 'CREATE TABLE IF NOT EXISTS `' . _DB_PREFIX_ . 'paypercut_telemetry_store` (
+    `id_paypercut_telemetry_store` INT(11) NOT NULL AUTO_INCREMENT,
+    `name` VARCHAR(191) NOT NULL,
+    `payload` LONGTEXT DEFAULT NULL,
+    `expires_at` INT(11) UNSIGNED NOT NULL DEFAULT 0,
+    `id_shop` INT(10) UNSIGNED NOT NULL DEFAULT 1,
+    `date_upd` DATETIME NOT NULL,
+    PRIMARY KEY (`id_paypercut_telemetry_store`),
+    UNIQUE KEY `name` (`name`),
+    KEY `expires_at` (`expires_at`)
+) ENGINE=' . _MYSQL_ENGINE_ . ' DEFAULT CHARSET=utf8mb4;';
+
 foreach ($sql as $query) {
     if (!Db::getInstance()->execute($query)) {
         return false;

@@ -41,14 +41,14 @@ jobs:
           tag_version = os.environ["VERSION"]
 
           content = Path("paypercut.php").read_text(encoding="utf-8")
-          m = re.search(r"\$this->version = '([^']*)'", content)
+          m = re.search(r"const VERSION = '([^']*)'", content)
           found = m.group(1) if m else "not found"
 
           if found != tag_version:
-              print(f"ERROR: paypercut.php $this->version is '{found}', expected '{tag_version}'", flush=True)
+              print(f"ERROR: paypercut.php Paypercut::VERSION is '{found}', expected '{tag_version}'", flush=True)
               raise SystemExit("Version mismatch — update repo files before tagging.")
 
-          print(f"OK: $this->version matches {tag_version}")
+          print(f"OK: Paypercut::VERSION matches {tag_version}")
           PY
         env:
           VERSION: ${{ steps.meta.outputs.version }}
