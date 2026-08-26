@@ -16,6 +16,7 @@ Accept payments via Paypercut in your PrestaShop store. Supports credit/debit ca
 - **Refunds**: Process full and partial refunds from the PrestaShop admin
 - **Multi-language**: 13 languages included (BG, CS, DA, DE, EN, ES, FR, HU, IT, NB, PL, RO, SV)
 - **Multi-currency**: BGN, DKK, SEK, NOK, GBP, EUR, USD, CHF, CZK, HUF, PLN, RON
+- **Debug sessions**: a merchant-started, self-expiring diagnostic feed for Paypercut support ([details](docs/telemetry.md))
 
 ## Installation
 
@@ -31,9 +32,10 @@ Accept payments via Paypercut in your PrestaShop store. Supports credit/debit ca
 1. Navigate to **Modules > Module Manager > Paypercut > Configure**
 2. Enter your **API Key** from the [Paypercut Dashboard](https://dashboard.paypercut.io)
 3. Click **Test Connection** to verify
-4. Configure your preferred **Checkout Mode** (Hosted or Embedded)
-5. Click **Create Webhook** to set up automatic payment notifications
-6. Save your settings
+4. Leave **Environment** on `production` unless Paypercut support asked you to change it — it selects both the payment API host and the telemetry host
+5. Configure your preferred **Checkout Mode** (Hosted or Embedded)
+6. Click **Create Webhook** to set up automatic payment notifications
+7. Save your settings
 
 ## Webhook Setup
 
@@ -42,6 +44,46 @@ The module can automatically create and manage webhooks. Click **Create Webhook*
 ```
 https://yourstore.com/module/paypercut/webhook
 ```
+
+## Debug Sessions
+
+When Paypercut support needs to see what your store is doing, open
+**Configure > Debug Session** and press **Start debug session**. The module then
+sends diagnostic events to Paypercut for about an hour and stops by itself; you
+can stop it sooner at any time. Nothing is sent when no session is running.
+
+The panel shows the session ID to quote in a support ticket, and — while the
+session runs — exactly which events left your store.
+
+### External services
+
+A debug session sends diagnostic data to Paypercut's telemetry service
+(`https://telemetry.paypercut.io`), and obtains a short-lived diagnostic token
+from `https://api.paypercut.io`. Both are operated by Paypercut. Nothing is sent
+outside a running session.
+
+**What is shared:** Module, PrestaShop, PHP and theme versions; the modules
+active on this store and their versions; how this store has the Paypercut module
+configured (which checkout mode is selected and which options are switched on —
+never the values of your credentials); a record of each checkout, refund and
+payment notification the module handled and whether it succeeded, identified by
+PrestaShop order reference and Paypercut payment reference; when something
+fails, the error message, the file and line it came from, and which module or
+theme raised it; and when the session started and stopped.
+
+**Not shared:** customer names, email addresses, billing or shipping addresses,
+order totals, line items, payment card data, the reason text you type when
+issuing a refund, or any API key, webhook secret or password.
+
+Your API key is never sent to the telemetry service. It is used once, over
+HTTPS, to obtain a short-lived diagnostic token from api.paypercut.io.
+
+Paypercut keeps this diagnostic data for 30 days.
+
+## Documentation
+
+- [`docs/telemetry.md`](docs/telemetry.md) — debug sessions: the event catalogue, the storage contract, and what never leaves the store
+- [`docs/INSTALLATION_GUIDE.md`](docs/INSTALLATION_GUIDE.md) — step-by-step install
 
 ## Supported Payment Statuses
 
@@ -64,10 +106,15 @@ paypercut/
 ├── LICENSE                    # License file
 ├── classes/
 │   ├── PaypercutApi.php       # API client
+│   ├── PaypercutApiException.php # Structured API error
+│   ├── PaypercutEnvironment.php  # dev/stage/production host resolution
 │   ├── PaypercutCustomer.php  # Customer mapping model
 │   ├── PaypercutTransaction.php # Transaction model
 │   ├── PaypercutRefund.php    # Refund tracking model
-│   └── PaypercutWebhookLog.php # Webhook idempotency log
+│   ├── PaypercutWebhookLog.php # Webhook idempotency log
+│   └── telemetry/             # Debug sessions (see docs/telemetry.md)
+├── tests/                     # Dependency-free suite: php tests/run.php
+├── upgrade/                   # PrestaShop upgrade scripts
 ├── controllers/
 │   ├── admin/
 │   │   └── AdminPaypercutController.php  # Admin configuration
@@ -101,6 +148,19 @@ paypercut/
             └── displayAdminOrderMainBottom.tpl # Admin order panel
 ```
 
+## Tests
+
+The module ships a dependency-free suite — no Composer, no vendored framework,
+so the folder stays installable by copying it:
+
+```bash
+php tests/run.php
+```
+
+It lints every PHP file and pins the pieces that must not drift: the
+environment host pairing, the telemetry deny assertion, the merchant-facing
+disclosure copy, and the event catalogue in `docs/telemetry.md`.
+
 ## Regenerating Translations
 
 If you modify translatable strings, regenerate the translation files:
@@ -108,6 +168,11 @@ If you modify translatable strings, regenerate the translation files:
 ```bash
 php modules/paypercut/tools/generate_translations.php
 ```
+
+## Documentation
+
+- [`docs/telemetry.md`](docs/telemetry.md) — debug sessions: the event catalogue, the storage contract, and what never leaves the store
+- [`docs/INSTALLATION_GUIDE.md`](docs/INSTALLATION_GUIDE.md) — step-by-step install
 
 ## Support
 
