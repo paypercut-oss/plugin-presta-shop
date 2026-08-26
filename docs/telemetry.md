@@ -262,7 +262,9 @@ merchant's consent with no re-mint.
 ## Tests
 
 `php tests/run.php` lints every PHP file and runs the suites, with no Composer
-dependency. `EnvironmentTest` pins the host pairing and the allow-list,
+dependency. `tests/` is excluded from the release zip and both entry points
+refuse to run outside the CLI, so a store served from a checkout does not expose
+them. `EnvironmentTest` pins the host pairing and the allow-list,
 `DenyAssertionTest` pins the privacy contract, `DisclosureTest` fails the build
 if the panel copy and `README.md` drift apart, and `EventCatalogTest` fails if a
 call site emits an event this page does not document.

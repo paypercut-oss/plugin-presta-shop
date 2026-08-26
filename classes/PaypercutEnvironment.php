@@ -163,6 +163,23 @@ class PaypercutEnvironment
     }
 
     /**
+     * The hostname of a base URI, for merchant-facing copy.
+     *
+     * The consent disclosure has to name the hosts this store will actually
+     * contact, which are not the production ones on a dev or stage store.
+     *
+     * @param string $url
+     *
+     * @return string
+     */
+    public static function host($url)
+    {
+        $parts = parse_url((string) $url);
+
+        return isset($parts['host']) ? (string) $parts['host'] : '';
+    }
+
+    /**
      * Accept a base URI only on an https Paypercut host.
      *
      * A credential travels on the mint request, so the destination is checked

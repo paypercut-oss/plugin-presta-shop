@@ -60,7 +60,9 @@ session runs — exactly which events left your store.
 A debug session sends diagnostic data to Paypercut's telemetry service
 (`https://telemetry.paypercut.io`), and obtains a short-lived diagnostic token
 from `https://api.paypercut.io`. Both are operated by Paypercut. Nothing is sent
-outside a running session.
+outside a running session. A store connected to a Paypercut test environment
+contacts that environment's hosts instead; the panel names the two hosts your
+store will actually contact before you start.
 
 **What is shared:** Module, PrestaShop, PHP and theme versions; the modules
 active on this store and their versions; how this store has the Paypercut module
@@ -79,11 +81,6 @@ Your API key is never sent to the telemetry service. It is used once, over
 HTTPS, to obtain a short-lived diagnostic token from api.paypercut.io.
 
 Paypercut keeps this diagnostic data for 30 days.
-
-## Documentation
-
-- [`docs/telemetry.md`](docs/telemetry.md) — debug sessions: the event catalogue, the storage contract, and what never leaves the store
-- [`docs/INSTALLATION_GUIDE.md`](docs/INSTALLATION_GUIDE.md) — step-by-step install
 
 ## Supported Payment Statuses
 

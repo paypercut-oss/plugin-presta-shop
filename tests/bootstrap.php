@@ -12,6 +12,12 @@
  * @license   https://mit-license.org ( MIT )
  */
 
+// CLI only. The release zip excludes tests/, but a store running from a
+// checkout would otherwise expose this over HTTP.
+if (PHP_SAPI !== 'cli') {
+    exit;
+}
+
 define('_PS_VERSION_', '8.1.7');
 define('_PS_ROOT_DIR_', '/var/www/html');
 define('_PS_MODULE_DIR_', '/var/www/html/modules/');

@@ -154,6 +154,8 @@ class AdminPaypercutController extends ModuleAdminController
             'paypercut_debug_session_log' => PaypercutTelemetryAdmin::sentLogRows(),
             'paypercut_debug_session_log_max' => PaypercutSentLog::MAX_ENTRIES,
             'paypercut_debug_session_ends_at' => $this->debugSessionEndsAt(),
+            'paypercut_api_host' => PaypercutEnvironment::host(PaypercutEnvironment::apiBaseUri(PaypercutEnvironment::current())),
+            'paypercut_telemetry_host' => $this->telemetryHost(),
         ));
 
         $this->context->smarty->assign('content', $this->context->smarty->fetch(
@@ -829,6 +831,25 @@ class AdminPaypercutController extends ModuleAdminController
         }
 
         return true;
+    }
+
+    /**
+     * The edge host to name in the consent copy.
+     *
+     * An unrecognised environment resolves no edge at all — and refuses Start —
+     * but the disclosure is still rendered, so it names the released host.
+     *
+     * @return string
+     */
+    private function telemetryHost()
+    {
+        $edge = PaypercutEnvironment::telemetryBaseUri(PaypercutEnvironment::current());
+
+        if ($edge === '') {
+            $edge = PaypercutEnvironment::TELEMETRY_BASE_URIS[PaypercutEnvironment::PRODUCTION];
+        }
+
+        return PaypercutEnvironment::host($edge);
     }
 
     /**
