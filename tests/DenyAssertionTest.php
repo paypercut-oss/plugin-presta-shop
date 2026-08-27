@@ -116,7 +116,8 @@ foreach (array(
 }
 
 // Group separators: space and hyphen alone let a dotted or slashed PAN through.
-foreach (array(' ', '-', '.', '/', '_', ',', ':') as $separator) {
+foreach (array(' ', '-', '.', '/', '_', ',', ':',
+    "\xC2\xA0", "\xE2\x80\x93", "\xE2\x80\x94", "\xE2\x80\xAF", "\xE2\x88\x92") as $separator) {
     $formatted = '4111' . $separator . '1111' . $separator . '1111' . $separator . '1111';
 
     Assert::true(
