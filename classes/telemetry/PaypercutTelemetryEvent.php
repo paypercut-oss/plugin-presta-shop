@@ -454,6 +454,12 @@ class PaypercutTelemetryEvent
      */
     public static function isDenied(array $fields, array $secrets = array(), $depth = 0)
     {
+        // Fail closed past the two levels the contract declares: a structure
+        // deeper than error.stack is one this screen has never been read against.
+        if ($depth > 2) {
+            return true;
+        }
+
         foreach ($fields as $key => $value) {
             if (preg_match(self::DENIED_KEY_PATTERN, (string) $key)) {
                 return true;
@@ -463,7 +469,7 @@ class PaypercutTelemetryEvent
             // Without recursion the assertion sees a non-string and gives up,
             // which is exactly where free text now lives.
             if (is_array($value)) {
-                if ($depth < 2 && self::isDenied($value, $secrets, $depth + 1)) {
+                if (self::isDenied($value, $secrets, $depth + 1)) {
                     return true;
                 }
 

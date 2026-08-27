@@ -202,7 +202,9 @@ Two controls, in this order:
    field that trips it means the event was assembled wrongly, so the rest of it
    cannot be trusted either. The audit line records the event name only. Screen
    the envelope, never a named subset — `about()` writes top-level siblings of
-   `attrs` from upstream webhook JSON.
+   `attrs` from upstream webhook JSON. It recurses the two levels the contract
+   declares (`error`, `error.stack`) and denies anything nested deeper, rather
+   than skipping a structure it has never been read against.
 
 `PaypercutTelemetrySession::credentials()` must enumerate every
 credential-bearing setting: comparing a value against the real secret is the

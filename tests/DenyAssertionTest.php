@@ -67,10 +67,18 @@ Assert::false(
     'an empty credential does not match every string'
 );
 
-// ── Rule 5: recursion, exactly two levels ──
+// ── Rule 5: recursion covers the contract's two levels, and fails closed past them ──
 Assert::true(
     PaypercutTelemetryEvent::isDenied(array('error' => array('stack' => array('at sk_live_leak')))),
     'denies a credential shape inside error.stack'
+);
+
+// The screen used to give up below error.stack, so a container nested deeper
+// than the contract declares passed unread. Anything the screen has not been
+// read against is denied rather than skipped.
+Assert::true(
+    PaypercutTelemetryEvent::isDenied(array('error' => array('stack' => array(array('at' => 'anything at all'))))),
+    'denies a structure nested deeper than the screen has been read against'
 );
 
 // ── The whole event is dropped, never redacted ──
