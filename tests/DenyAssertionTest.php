@@ -11,10 +11,24 @@
 Assert::suite('DenyAssertion');
 
 // ── Rule 1: denied field names, at any nesting level ──
-foreach (array('api_client_secret', 'telemetry_token', 'api_key', 'nonce', 'authorization', 'webhook_secret', 'password', 'credential') as $key) {
+foreach (array(
+    'api_client_secret', 'telemetry_token', 'api_key', 'nonce', 'authorization',
+    'webhook_secret', 'password', 'credential', 'auth', 'auth_token', 'x-auth',
+    'csrf-token', 'access_token', 'client_secret', 'SECRET',
+) as $key) {
     Assert::true(
         PaypercutTelemetryEvent::isDenied(array($key => 'anything')),
         'denies the field name ' . $key
+    );
+}
+
+// …as whole words. The module inventory turns merchant slugs into attribute
+// keys, and a bare substring match dropped Authorize.net from the one artefact
+// whose only purpose is diagnosing a conflict with another payment module.
+foreach (array('authorizeaim', 'authorizenet_aim', 'tokenizer_pro', 'nonceguard', 'author', 'authorised', 'monkey') as $key) {
+    Assert::false(
+        PaypercutTelemetryEvent::isDenied(array($key => '1.0.0')),
+        'permits the field name ' . $key
     );
 }
 
@@ -65,13 +79,51 @@ Assert::true(
     'denies a PAN between two other long digit runs'
 );
 
-// The price of sliding: a long digit run that is not a card number very often
-// contains a Luhn-valid window ('1234567890123456' contains '34567890123456'),
-// so a 14+ digit id bins its event. No event this module emits carries one.
-Assert::true(
+// The price of sliding used to be that a long digit run that is not a card
+// number very often contains a Luhn-valid window: 10 windows in a 16-digit run,
+// each about one in ten to pass Luhn by chance, denied 65.8% of random 16-digit
+// identifiers (329/500 measured). A window now has to start with a prefix an
+// issuer actually assigns, at a length that issuer really uses, which brings
+// that to 7.0% (35/500) while every brand below is still caught.
+Assert::false(
     PaypercutTelemetryEvent::containsCardNumber('transaction 1234567890123456 not found'),
-    'a 16-digit id containing a Luhn-valid window is denied, fail-safe'
+    'a 16-digit id under no issuer prefix is not mistaken for a card'
 );
+
+foreach (array(
+    'visa-13' => '4222222222222',
+    'visa-16' => '4012888888881881',
+    'visa-19' => '4111111111111111110',
+    'mastercard-16' => '5555555555554444',
+    'mastercard-2-series' => '2223003122003222',
+    'amex-15' => '378282246310005',
+    'discover-16' => '6011111111111117',
+    'diners-14' => '30569309025904',
+    'jcb-16' => '3530111333300000',
+    'unionpay-16' => '6250947000000014',
+    'maestro-16' => '6759649826438453',
+) as $brand => $pan) {
+    Assert::true(
+        PaypercutTelemetryEvent::containsCardNumber('Card ' . $pan . ' declined'),
+        'denies a ' . $brand . ' PAN'
+    );
+
+    // Filler digits on either side are not a redaction, so the scan still slides.
+    Assert::true(
+        PaypercutTelemetryEvent::containsCardNumber(str_repeat('7', 40) . $pan . str_repeat('7', 40)),
+        'denies a ' . $brand . ' PAN buried in a longer digit run'
+    );
+}
+
+// Group separators: space and hyphen alone let a dotted or slashed PAN through.
+foreach (array(' ', '-', '.', '/', '_', ',', ':') as $separator) {
+    $formatted = '4111' . $separator . '1111' . $separator . '1111' . $separator . '1111';
+
+    Assert::true(
+        PaypercutTelemetryEvent::containsCardNumber('card ' . $formatted . ' declined'),
+        'denies a PAN grouped with "' . $separator . '"'
+    );
+}
 
 Assert::true(
     PaypercutTelemetryEvent::isDenied(array('message' => 'Card 4111111111111111 was declined')),
@@ -356,6 +408,81 @@ Assert::same(
     'a fragment too short to be a credential does not bin the event'
 );
 
+// …and it is read at every offset, not just the head. The comparison used to
+// test the value's TAIL against the secret's HEAD, so a slice out of the middle
+// of the store's API key went out.
+Configuration::$values = array();
+$opaque = 'ZmFrZXN0b3JlYXBpa2V5MTIzNDU2Nzg5MEFCQ0RFRkdISUo';
+Configuration::$values[Paypercut::CONFIG_API_KEY] = $opaque;
+
+foreach (array(array(0, 20), array(5, 20), array(12, 20), array(27, 20), array(35, 12)) as $slice) {
+    list($offset, $length) = $slice;
+
+    Assert::same(
+        0,
+        count($method->invoke(null, array(
+            PaypercutTelemetryEvent::of('webhook.received', array('note' => 'rejected ' . substr($opaque, $offset, $length)))->envelope(1787250271),
+        ))),
+        'a ' . $length . '-character slice of the API key at offset ' . $offset . ' is denied'
+    );
+}
+
+Assert::same(
+    1,
+    count($method->invoke(null, array(
+        PaypercutTelemetryEvent::of('webhook.received', array('note' => substr($opaque, 9, 11)))->envelope(1787250271),
+    ))),
+    'eleven shared characters are still too few to bin the event'
+);
+
+Configuration::$values = array();
+Configuration::$values[Paypercut::CONFIG_API_KEY] = 'sk_live_realsecret';
+Configuration::$values[Paypercut::CONFIG_WEBHOOK_SECRET] = 'XYZ-unguessable-webhook-secret';
+
+// ── Non-string scalars are screened too ──
+//
+// The screen ran on is_string() alone and cleanAttrs() passes ints and floats
+// through untouched, so a PAN passed as a PHP INTEGER — it fits in 64 bits —
+// was serialised and shipped whole.
+Assert::same(
+    0,
+    count($method->invoke(null, array(
+        PaypercutTelemetryEvent::of('checkout.started', array('amount' => 4111111111111111))->envelope(1787250271),
+    ))),
+    'a PAN passed as an int is denied'
+);
+
+Assert::same(
+    0,
+    count($method->invoke(null, array(
+        PaypercutTelemetryEvent::of('checkout.started', array('amount' => 4111111111111111.0))->envelope(1787250271),
+    ))),
+    'a PAN passed as a float is denied'
+);
+
+Assert::same(
+    0,
+    count($method->invoke(null, array(
+        array('event' => 'checkout.started', 'error' => array('stack' => array('n' => 4111111111111111))),
+    ))),
+    'a PAN as an int two levels deep is denied'
+);
+
+Assert::same(
+    1,
+    count($method->invoke(null, array(
+        PaypercutTelemetryEvent::of('webhook.received', array(
+            'http_status' => 503,
+            'attempt' => 2,
+            'duration_ms' => 1421,
+            'occurred_ms' => 1787250271000,
+            'is_partial' => true,
+            'duplicate' => false,
+        ))->envelope(1787250271),
+    ))),
+    'ordinary ints, a millisecond timestamp and bools still ship'
+);
+
 // ── Correlation ids are bounded to a reference charset, not free text ──
 $hostile = array(
     'markup' => '<script>alert(1)</script>',
@@ -363,6 +490,11 @@ $hostile = array(
     'an RTL override' => "order\xE2\x80\xAE9188",
     'a quoted statement' => "0'; DROP--",
     'an email address' => 'jane@example.com',
+    // Reference-shaped, and a path: order_ref is quoted back in support tools.
+    'a path traversal' => '../../etc/passwd',
+    'a relative segment' => 'a/../b',
+    'an absolute path' => '/etc/passwd',
+    'a trailing separator' => 'x/',
 );
 
 foreach ($hostile as $label => $value) {

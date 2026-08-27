@@ -37,7 +37,7 @@ class PaypercutTelemetryEvent
 
     const MAX_STACK_FRAMES = 8;
 
-    /** Shortest leading run of a credential that still counts as carrying it. */
+    /** Shortest run of a credential that still counts as carrying it. */
     const MIN_SECRET_FRAGMENT = 12;
 
     /**
@@ -57,8 +57,15 @@ class PaypercutTelemetryEvent
      */
     const DENIED_MARKER = 'ppc_denied_by_screen';
 
-    /** Field names that must never appear in an event, whatever their value. */
-    const DENIED_KEY_PATTERN = '/secret|token|password|credential|nonce|auth|_key$/i';
+    /**
+     * Field names that must never appear in an event, whatever their value.
+     *
+     * Matched as whole words: the module inventory turns merchant slugs into
+     * attribute keys, and a bare substring match drops Authorize.net
+     * ('authorizeaim', 'authorizenet_aim') and every other slug that merely
+     * contains one of these words.
+     */
+    const DENIED_KEY_PATTERN = '/(?:^|[^A-Za-z0-9])(?:secrets?|tokens?|passwords?|credentials?|nonces?|authori[sz]ation|auth)(?:$|[^A-Za-z0-9])|_key$/i';
 
     /**
      * Value shapes that must never appear, whatever their field name.
@@ -69,6 +76,34 @@ class PaypercutTelemetryEvent
      * tripped assertion bins the whole event.
      */
     const DENIED_VALUE_PATTERN = '/(?:^|[^A-Za-z0-9_])(ppc_|sk_|pk_|whsec_|eyJ[A-Za-z0-9_-]+\.)/i';
+
+    /**
+     * Issuer prefixes, and the lengths those issuers actually assign.
+     *
+     * Luhn alone passes about one digit window in ten, so a sliding scan over a
+     * bare 16-digit merchant order number denies it roughly two times in three.
+     * Requiring an assigned prefix at a length that issuer really uses is what
+     * keeps the scan usable on real telemetry; the gap it accepts is MII 1/7/8/9,
+     * which no card network issues under.
+     */
+    const CARD_PREFIXES = array(
+        // Visa
+        '/^4/' => array(13, 16, 19),
+        // Mastercard, both the 51-55 and the 2221-2720 range
+        '/^(?:5[1-5]|2(?:2[2-9]\d|[3-6]\d\d|7[01]\d|720))/' => array(16),
+        // American Express
+        '/^3[47]/' => array(15),
+        // Discover
+        '/^(?:6011|64[4-9]|65)/' => array(16, 19),
+        // Diners Club
+        '/^(?:30[0-5]|3095|3[689])/' => array(14, 16, 19),
+        // JCB
+        '/^35(?:2[89]|[3-8]\d)/' => array(16, 17, 18, 19),
+        // UnionPay
+        '/^62/' => array(16, 17, 18, 19),
+        // Maestro
+        '/^(?:5018|5020|5038|5893|6304|6759|676[1-3])/' => array(13, 14, 15, 16, 17, 18, 19),
+    );
 
     /**
      * Host and platform versions. Read by environmentSnapshot().
@@ -546,7 +581,22 @@ class PaypercutTelemetryEvent
                 continue;
             }
 
-            if (!is_string($value) || $value === '') {
+            if (is_bool($value) || $value === null) {
+                continue;
+            }
+
+            if (!is_scalar($value)) {
+                // Not a container, not a scalar: a shape this screen has never
+                // been read against, same rule as a too-deep structure.
+                return true;
+            }
+
+            // Ints and floats are serialised beside the strings and were never
+            // screened: a PAN fits in a 64-bit int, and 4111111111111111 as an
+            // attribute VALUE went out verbatim.
+            $value = is_string($value) ? $value : self::wireForm($value);
+
+            if ($value === '') {
                 continue;
             }
 
@@ -556,6 +606,23 @@ class PaypercutTelemetryEvent
         }
 
         return false;
+    }
+
+    /**
+     * A non-string scalar exactly as json_encode will render it on the wire.
+     *
+     * Not (string): PHP's float cast rounds to `precision` and yields
+     * 4.1111111111111E+15 where json_encode writes all sixteen digits out.
+     *
+     * @param int|float $value
+     *
+     * @return string
+     */
+    private static function wireForm($value)
+    {
+        $json = json_encode($value);
+
+        return is_string($json) ? $json : (string) $value;
     }
 
     /**
@@ -633,10 +700,12 @@ class PaypercutTelemetryEvent
      * Does this value carry the store's credential, whole or clipped?
      *
      * text() screens before it clamps, so this is the queue's own net: a value
-     * that arrived already bounded can still hold a credential as its tail,
-     * where a plain substring comparison against the whole secret misses it.
-     * Anything shorter than MIN_SECRET_FRAGMENT is not enough of a credential
-     * to be worth the false positives.
+     * that arrived already bounded can still hold a credential in part, where a
+     * plain substring comparison against the whole secret misses it. Any run of
+     * MIN_SECRET_FRAGMENT characters shared with the credential counts, wherever
+     * it sits in either string — a clamp can leave the head, the tail or a slice
+     * out of the middle, and a shorter run is not enough of a credential to be
+     * worth the false positives.
      *
      * @param string $value
      * @param mixed  $secret
@@ -653,10 +722,15 @@ class PaypercutTelemetryEvent
             return true;
         }
 
-        $length = min(strlen($value), strlen($secret) - 1);
+        $window = self::MIN_SECRET_FRAGMENT;
+        $last = strlen($value) - $window;
 
-        for ($n = $length; $n >= self::MIN_SECRET_FRAGMENT; --$n) {
-            if (substr($value, -$n) === substr($secret, 0, $n)) {
+        if ($last < 0 || strlen($secret) < $window) {
+            return false;
+        }
+
+        for ($start = 0; $start <= $last; ++$start) {
+            if (strpos($secret, substr($value, $start, $window)) !== false) {
                 return true;
             }
         }
@@ -677,7 +751,10 @@ class PaypercutTelemetryEvent
      */
     public static function containsCardNumber($value)
     {
-        if (!preg_match_all('/\d(?:[ -]?\d){12,}/', (string) $value, $matches)) {
+        // Every separator a PAN is pasted with — a spreadsheet export, a log
+        // line, a merchant typing it by hand. Space and hyphen alone let
+        // '4111.1111.1111.1111' through untouched.
+        if (!preg_match_all('/\d(?:[ .\/_,:-]?\d){12,}/', (string) $value, $matches)) {
             return false;
         }
 
@@ -688,10 +765,36 @@ class PaypercutTelemetryEvent
             // A PAN inside a longer digit run is still a PAN: 40 filler digits
             // in front of one is not a redaction, so slide rather than anchor.
             for ($start = 0; $start + 13 <= $length; ++$start) {
-                for ($size = 13; $size <= 19 && $start + $size <= $length; ++$size) {
-                    if (self::luhnValid(substr($digits, $start, $size))) {
-                        return true;
-                    }
+                if (self::issuedCardAt($digits, $start, $length)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Is there a Luhn-valid window at this offset that an issuer would assign?
+     *
+     * @param string $digits
+     * @param int    $start
+     * @param int    $length
+     *
+     * @return bool
+     */
+    private static function issuedCardAt($digits, $start, $length)
+    {
+        $head = substr($digits, $start, 6);
+
+        foreach (self::CARD_PREFIXES as $prefix => $sizes) {
+            if (!preg_match($prefix, $head)) {
+                continue;
+            }
+
+            foreach ($sizes as $size) {
+                if ($start + $size <= $length && self::luhnValid(substr($digits, $start, $size))) {
+                    return true;
                 }
             }
         }
@@ -791,13 +894,21 @@ class PaypercutTelemetryEvent
      * 9-character reference; the slash keeps a merchant scheme like
      * 'INV/2026-0001' lossless. No colon, so a URL cannot pass as a reference.
      *
+     * Alphanumeric at both ends and no '..' anywhere: separators join segments
+     * of a real reference, and without that '../../etc/passwd' is
+     * reference-shaped and lands verbatim in order_ref.
+     *
      * @param string $value
      *
      * @return string
      */
     public static function reference($value)
     {
-        return preg_match('/^[A-Za-z0-9_.\/-]{1,64}\z/D', (string) $value) ? (string) $value : '';
+        $value = (string) $value;
+
+        return preg_match('/^(?!.*\.\.)[A-Za-z0-9](?:[A-Za-z0-9_.\/-]{0,62}[A-Za-z0-9])?\z/D', $value)
+            ? $value
+            : '';
     }
 
     /**

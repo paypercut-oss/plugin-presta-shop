@@ -201,14 +201,19 @@ Three controls, in this order:
    clamp meant a PAN starting at byte 241 shipped as 15 of its 16 digits, which
    Luhn completes uniquely. Correlation ids (`payment_intent_id`, `payment_id`,
    `order_ref`) are then bounded by `reference()` — identifier characters plus
-   `/`, so a real merchant reference stays lossless while markup, a URL or an
-   email address is dropped rather than transmitted.
+   `/`, alphanumeric at both ends and no `..` segment, so a real merchant
+   reference (`XKBKNABJK`, `cart_12`, `INV/2026-0001`) stays lossless while
+   markup, a URL, an email address or a path like `../../etc/passwd` is dropped
+   rather than transmitted.
 3. **The deny assertion is the safety net.** `PaypercutTelemetryQueue::append()`
    screens the **whole envelope** as it will be serialised — correlation fields
    included, two levels deep — for denied field names, denied value shapes, a
-   Luhn-valid PAN, and the store's actual credentials, whole or clipped by the
-   byte clamp. Every screen runs over attribute **keys** as well as values: a
-   key is on the wire exactly like the value beside it. It **drops the whole
+   Luhn-valid PAN, and the store's actual credentials — whole, or any run of 12
+   characters shared with one wherever it sits, since the byte clamp can leave
+   the head, the tail or a slice out of the middle. Every screen runs over
+   attribute **keys** as well as values, and over ints and floats as
+   `json_encode` will render them: a key is on the wire exactly like the value
+   beside it, and a PAN fits in a 64-bit int. It **drops the whole
    event** rather than redacting a field: a field that trips it means the event
    was assembled wrongly, so the rest of it cannot be trusted either. The audit
    line records the event name only. Screen the envelope, never a named subset —
@@ -218,9 +223,20 @@ Three controls, in this order:
    been read against.
 
 The PAN scan slides a 13–19 digit window across every digit run, so filler
-digits in front of a card number no longer hide it. The price is that any 14+
-digit run very often contains a Luhn-valid window and bins its event; no event
-this module emits carries one.
+digits in front of a card number no longer hide it, and it tolerates every
+separator a PAN is pasted with (space, hyphen, dot, slash, underscore, comma,
+colon). A window only reaches the Luhn test if it starts with a prefix an issuer
+actually assigns, at a length that issuer really uses (`CARD_PREFIXES`): Luhn
+alone passes about one window in ten, and a 16-digit run holds ten of them, so
+an unfiltered scan denied 65.8% of random 16-digit identifiers (329/500) —
+issuer gating brings that to 7.0% (35/500) with every brand still caught. The
+gap it accepts is MII 1/7/8/9, which no card network issues under.
+
+Denied field names (`secret`, `token`, `password`, `credential`, `nonce`,
+`auth`, `authorization`, and any `*_key`) match as whole words. A bare substring
+match dropped Authorize.net's real slugs (`authorizeaim`, `authorizenet_aim`)
+from the module inventory — the one artefact whose whole purpose is diagnosing a
+conflict with another payment module.
 
 `PaypercutTelemetrySession::credentials()` must enumerate every
 credential-bearing setting: comparing a value against the real secret is the

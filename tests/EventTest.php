@@ -207,8 +207,15 @@ Assert::same($modules, $seen, 'the inventory is carried intact');
 
 // A slug that trips the deny assertion costs one module, never the chunk: the
 // inventory is the one artefact whose only purpose is conflict diagnosis.
+//
+// 'authorizeaim' is Authorize.net's real slug and must survive: the key screen
+// used to match a bare 'auth' anywhere, which cost a real merchant the one
+// module most worth knowing about in a payment conflict.
 $hostile = PaypercutTelemetryEvent::environmentModules(array(
     'authorizeaim' => '3.0.0',
+    'authorizenet_aim' => '1.2.0',
+    'tokenizer_pro' => '1.0.0',
+    'securepay_nonce' => '1.0.0',
     'ps_checkout' => '2.0',
     'blockcart' => '1.0',
 ));
@@ -216,11 +223,14 @@ $hostile = PaypercutTelemetryEvent::environmentModules(array(
 $inventory = $hostile[0]->envelope(1787250271);
 
 Assert::same(1, count($hostile), 'a small inventory is one chunk');
-Assert::false(isset($inventory['attrs']['authorizeaim']), 'the slug that trips the assertion is left out');
+Assert::same('3.0.0', $inventory['attrs']['authorizeaim'], 'a slug merely containing "auth" survives');
+Assert::same('1.2.0', $inventory['attrs']['authorizenet_aim'], 'so does authorizenet_aim');
+Assert::same('1.0.0', $inventory['attrs']['tokenizer_pro'], 'so does a slug merely containing "token"');
+Assert::false(isset($inventory['attrs']['securepay_nonce']), 'a slug whose own word is "nonce" is left out');
 Assert::same('2.0', $inventory['attrs']['ps_checkout'], 'its neighbours survive');
 Assert::same('1.0', $inventory['attrs']['blockcart'], 'the whole chunk is not binned');
 Assert::same(1, $inventory['attrs']['omitted'], 'the gap is reported rather than hidden');
-Assert::same(3, $inventory['attrs']['module_count'], 'module_count still names the true total');
+Assert::same(6, $inventory['attrs']['module_count'], 'module_count still names the true total');
 
 // ── Upstream exception prose never reaches the wire ──
 $platform = PaypercutTelemetryEvent::failure(
