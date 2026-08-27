@@ -47,9 +47,31 @@ foreach (array('disk_usage exceeded', 'backpack_pk_none missing', 'risk_free win
 // ── Rule 3: a Luhn-valid PAN anywhere in the value ──
 Assert::true(PaypercutTelemetryEvent::containsCardNumber('Card 4111111111111111 was declined'), 'denies an embedded PAN');
 Assert::true(PaypercutTelemetryEvent::containsCardNumber('card 4111 1111 1111 1111 declined'), 'denies a spaced PAN');
-Assert::false(PaypercutTelemetryEvent::containsCardNumber('transaction 1234567890123456 not found'), 'permits a non-Luhn 16-digit id');
 Assert::false(PaypercutTelemetryEvent::containsCardNumber('expired at 1787250271000'), 'permits a millisecond timestamp');
 Assert::false(PaypercutTelemetryEvent::containsCardNumber('amount 4250 refused'), 'permits a short amount');
+
+// The scan slides across the whole digit run: anchoring it meant 40 filler
+// digits in front of a PAN passed, which is not a redaction.
+Assert::true(
+    PaypercutTelemetryEvent::containsCardNumber(str_repeat('7', 40) . '4111111111111111'),
+    'denies a PAN behind a longer digit run'
+);
+Assert::true(
+    PaypercutTelemetryEvent::containsCardNumber('4111111111111111' . str_repeat('7', 40)),
+    'denies a PAN in front of a longer digit run'
+);
+Assert::true(
+    PaypercutTelemetryEvent::containsCardNumber('99887766554433 4012888888881881 00112233445566'),
+    'denies a PAN between two other long digit runs'
+);
+
+// The price of sliding: a long digit run that is not a card number very often
+// contains a Luhn-valid window ('1234567890123456' contains '34567890123456'),
+// so a 14+ digit id bins its event. No event this module emits carries one.
+Assert::true(
+    PaypercutTelemetryEvent::containsCardNumber('transaction 1234567890123456 not found'),
+    'a 16-digit id containing a Luhn-valid window is denied, fail-safe'
+);
 
 Assert::true(
     PaypercutTelemetryEvent::isDenied(array('message' => 'Card 4111111111111111 was declined')),
@@ -176,6 +198,33 @@ function paypercut_set_path(array $node, array $path, $value)
     return $node;
 }
 
+/**
+ * Rename the leaf at $path to $key, keeping its value.
+ *
+ * @param array  $node
+ * @param array  $path
+ * @param string $key
+ *
+ * @return array
+ */
+function paypercut_rekey_path(array $node, array $path, $key)
+{
+    $name = array_shift($path);
+
+    if (empty($path)) {
+        $value = isset($node[$name]) ? $node[$name] : 'x';
+        unset($node[$name]);
+        $node[$key] = $value;
+
+        return $node;
+    }
+
+    $child = isset($node[$name]) && is_array($node[$name]) ? $node[$name] : array();
+    $node[$name] = paypercut_rekey_path($child, $path, $key);
+
+    return $node;
+}
+
 Configuration::$values[Paypercut::CONFIG_API_KEY] = 'sk_live_realsecret';
 Configuration::$values[Paypercut::CONFIG_WEBHOOK_SECRET] = 'XYZ-unguessable-webhook-secret';
 
@@ -224,29 +273,132 @@ foreach ($leaves as $path) {
             count($method->invoke(null, array($mutated))),
             $label . ' at ' . implode('.', $path) . ' is denied'
         );
+
+        // Keys are serialised beside their values. The screen used to test a key
+        // against the field-NAME regex only, so a PAN or the store's own key
+        // used as an attribute name went out whole.
+        Assert::same(
+            0,
+            count($method->invoke(null, array(paypercut_rekey_path($wire, $path, $canary)))),
+            $label . ' as the KEY at ' . implode('.', $path) . ' is denied'
+        );
     }
 }
 
-// text() clamps to MAX_TEXT_BYTES before the screen ever sees the value, so a
-// secret straddling the cut reaches the assertion as a leading fragment.
-$clipped = PaypercutTelemetryEvent::text(str_repeat('x', 240) . 'sk_live_realsecret');
-Assert::true(
-    strpos($clipped, 'sk_live_realsecret') === false,
-    'the clamp really does cut the credential in half'
-);
-Assert::same(
-    0,
-    count($method->invoke(null, array(paypercut_set_path($wire, array('order_ref'), $clipped)))),
-    'a credential clipped by the byte clamp is still denied'
-);
+// The same, through a real producer rather than a hand-built envelope: cleanAttrs
+// and environmentModules are the two places a key is not a literal.
+foreach ($canaries as $label => $canary) {
+    Assert::same(
+        0,
+        count($method->invoke(null, array(PaypercutTelemetryEvent::of('checkout.started', array($canary => 'x'))->envelope(1787250271)))),
+        $label . ' as an attribute key from of() is denied'
+    );
+}
 
-// Below MIN_SECRET_FRAGMENT a leading run is no longer a credential, and binning
-// events over six shared characters would cost more than it saves.
-$stub = PaypercutTelemetryEvent::text(str_repeat('x', 250) . 'sk_live_realsecret');
+$poisoned = PaypercutTelemetryEvent::environmentModules(array('ps_checkout' => '2.0', '4111111111111111' => '1.0', 'blockcart' => '1.0'));
+$inventory = $method->invoke(null, array($poisoned[0]->envelope(1787250271)));
+Assert::same(1, count($inventory), 'a poisoned module slug does not bin the inventory event');
+Assert::same(1, $inventory[0]['attrs']['omitted'], 'the poisoned slug is the one thing omitted');
+Assert::true(isset($inventory[0]['attrs']['ps_checkout']), 'the ordinary slugs still report');
+
+// ── The screen runs BEFORE the clamp ──
+//
+// text() used to clamp to MAX_TEXT_BYTES and let the assertion read the
+// survivor, so a PAN starting at byte 241 went out as 15 of its 16 digits —
+// enough to complete by Luhn, which is no redaction at all. The raw value is
+// screened first and the field is replaced by a token the assertion denies.
+foreach (array(241, 244, 250) as $pad) {
+    $raw = str_repeat('x', $pad) . '4111111111111111';
+
+    Assert::same(
+        PaypercutTelemetryEvent::DENIED_MARKER,
+        PaypercutTelemetryEvent::text($raw),
+        'a PAN straddling the clamp is screened before the cut, pad ' . $pad
+    );
+
+    Assert::same(
+        0,
+        count($method->invoke(null, array(
+            PaypercutTelemetryEvent::of('webhook.received', array('note' => $raw))->envelope(1787250271),
+        ))),
+        'an attribute whose raw value straddles the clamp is denied, pad ' . $pad
+    );
+
+    Assert::same(
+        0,
+        count($method->invoke(null, array(
+            PaypercutTelemetryEvent::of('webhook.received')->about(array('order_ref' => $raw))->envelope(1787250271),
+        ))),
+        'a correlation id whose raw value straddles the clamp is denied, pad ' . $pad
+    );
+}
+
+// The store's own credential, in a shape no pattern anticipates, at every
+// alignment the clamp can leave behind.
+foreach (array(2, 6, 11, 12, 18) as $surviving) {
+    $raw = str_repeat('x', 256 - $surviving) . 'sk_live_realsecret';
+
+    Assert::same(
+        0,
+        count($method->invoke(null, array(
+            PaypercutTelemetryEvent::of('webhook.received', array('note' => $raw))->envelope(1787250271),
+        ))),
+        'a credential straddling the clamp is denied with ' . $surviving . ' characters surviving'
+    );
+}
+
+// The queue's own screen keeps MIN_SECRET_FRAGMENT: at that gate the value has
+// already been bounded, and binning events over six shared characters would
+// cost more than it saves.
 Assert::same(
     1,
-    count($method->invoke(null, array(paypercut_set_path($wire, array('order_ref'), $stub)))),
+    count($method->invoke(null, array(paypercut_set_path($wire, array('order_ref'), 'xxxxxxsk_liv')))),
     'a fragment too short to be a credential does not bin the event'
+);
+
+// ── Correlation ids are bounded to a reference charset, not free text ──
+$hostile = array(
+    'markup' => '<script>alert(1)</script>',
+    'a URL' => 'https://evil.example/collect?a=1',
+    'an RTL override' => "order\xE2\x80\xAE9188",
+    'a quoted statement' => "0'; DROP--",
+    'an email address' => 'jane@example.com',
+);
+
+foreach ($hostile as $label => $value) {
+    $envelope = PaypercutTelemetryEvent::of('webhook.received')
+        ->about(array('payment_id' => $value, 'payment_intent_id' => $value, 'order_ref' => $value))
+        ->envelope(1787250271);
+
+    $shipped = $method->invoke(null, array($envelope));
+
+    Assert::true(
+        count($shipped) === 0
+            || (!isset($shipped[0]['payment_id']) && !isset($shipped[0]['payment_intent_id']) && !isset($shipped[0]['order_ref'])),
+        $label . ' never reaches the wire as a correlation id'
+    );
+}
+
+// …and the references this module really builds stay lossless: a PrestaShop
+// order reference, cart_/order_ fallbacks, Paypercut ids, and a merchant
+// numbering scheme with a slash.
+foreach (array('XKBKNABJK', 'cart_12', 'order_9931', 'INV/2026-0001', 'pay_3d9f8c2b1a', 'pi_9RTvK2') as $reference) {
+    $shipped = $method->invoke(null, array(
+        PaypercutTelemetryEvent::of('webhook.received')
+            ->about(array('order_ref' => $reference, 'payment_id' => $reference))
+            ->envelope(1787250271),
+    ));
+
+    Assert::same(1, count($shipped), 'the reference ' . $reference . ' still delivers');
+    Assert::same($reference, $shipped[0]['order_ref'], 'the reference ' . $reference . ' is carried intact');
+}
+
+Assert::same(
+    0,
+    count($method->invoke(null, array(
+        PaypercutTelemetryEvent::of('webhook.received')->about(array('order_ref' => '4111111111111111'))->envelope(1787250271),
+    ))),
+    'a bare PAN is reference-shaped, and still denied'
 );
 
 // Screening the whole envelope must not start binning ordinary events: every

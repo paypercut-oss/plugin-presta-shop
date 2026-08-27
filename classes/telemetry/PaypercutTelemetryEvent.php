@@ -40,6 +40,23 @@ class PaypercutTelemetryEvent
     /** Shortest leading run of a credential that still counts as carrying it. */
     const MIN_SECRET_FRAGMENT = 12;
 
+    /**
+     * How far the pre-clamp screen reads into a value.
+     *
+     * Only the first MAX_TEXT_BYTES can ever reach the wire, so anything
+     * straddling the clamp is inside this window whatever the value's length.
+     */
+    const SCREEN_BYTES = 1024;
+
+    /**
+     * What a bounding helper puts in a field whose RAW value tripped the screen.
+     *
+     * The clamp would otherwise hand the deny assertion a fragment — 12 digits
+     * of a PAN is not redaction — so the value is replaced by a token the
+     * assertion denies, and the whole event goes with it.
+     */
+    const DENIED_MARKER = 'ppc_denied_by_screen';
+
     /** Field names that must never appear in an event, whatever their value. */
     const DENIED_KEY_PATTERN = '/secret|token|password|credential|nonce|auth|_key$/i';
 
@@ -396,8 +413,22 @@ class PaypercutTelemetryEvent
         foreach (array('payment_intent_id', 'payment_id', 'order_ref') as $field) {
             $value = trim((string) (isset($correlation[$field]) ? $correlation[$field] : ''));
 
-            if ($value !== '') {
-                $this->correlation[$field] = self::text($value);
+            if ($value === '') {
+                continue;
+            }
+
+            // Screened before it is bounded: the reference charset admits a bare
+            // PAN, and a value the bound would drop must still deny the event.
+            if (self::screenRaw($value)) {
+                $this->correlation[$field] = self::DENIED_MARKER;
+
+                continue;
+            }
+
+            $clean = self::reference($value);
+
+            if ($clean !== '') {
+                $this->correlation[$field] = $clean;
             }
         }
 
@@ -496,7 +527,11 @@ class PaypercutTelemetryEvent
         }
 
         foreach ($fields as $key => $value) {
-            if (preg_match(self::DENIED_KEY_PATTERN, (string) $key)) {
+            // Keys are serialised beside their values, so the value screens run
+            // over the key as well — a PAN used as an attribute name is on the
+            // wire exactly like one used as an attribute value.
+            if (preg_match(self::DENIED_KEY_PATTERN, (string) $key)
+                || self::deniesValue((string) $key, $secrets)) {
                 return true;
             }
 
@@ -515,21 +550,8 @@ class PaypercutTelemetryEvent
                 continue;
             }
 
-            if (preg_match(self::DENIED_VALUE_PATTERN, $value)) {
+            if (self::deniesValue($value, $secrets)) {
                 return true;
-            }
-
-            if (self::containsCardNumber($value)) {
-                return true;
-            }
-
-            // Shape matching is a guess; comparing against the store's actual
-            // credentials is not. This catches a secret in a format nobody
-            // anticipated, including one a future Paypercut release introduces.
-            foreach ($secrets as $secret) {
-                if (self::carriesSecret($value, $secret)) {
-                    return true;
-                }
             }
         }
 
@@ -537,13 +559,84 @@ class PaypercutTelemetryEvent
     }
 
     /**
+     * The value screen: what must never appear whatever the field is called.
+     *
+     * Public because the bounding helpers run it on the RAW value, before any
+     * clamp; isDenied() runs it again on every key and value of the envelope.
+     *
+     * @param string $value
+     * @param array  $secrets
+     *
+     * @return bool
+     */
+    public static function deniesValue($value, array $secrets = array())
+    {
+        $value = (string) $value;
+
+        if ($value === '') {
+            return false;
+        }
+
+        if ($value === self::DENIED_MARKER) {
+            return true;
+        }
+
+        if (preg_match(self::DENIED_VALUE_PATTERN, $value)) {
+            return true;
+        }
+
+        if (self::containsCardNumber($value)) {
+            return true;
+        }
+
+        // Shape matching is a guess; comparing against the store's actual
+        // credentials is not. This catches a secret in a format nobody
+        // anticipated, including one a future Paypercut release introduces.
+        foreach ($secrets as $secret) {
+            if (self::carriesSecret($value, $secret)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Screen a value as it arrives, before any bounding helper clamps it.
+     *
+     * @param string $clean  Control-stripped, unclamped
+     *
+     * @return bool
+     */
+    private static function screenRaw($clean)
+    {
+        $clean = (string) $clean;
+
+        // The credential comparison is a database read, and only a value long
+        // enough to be clamped can hide one from the queue's screen.
+        $secrets = strlen($clean) > self::MAX_TEXT_BYTES ? self::storeSecrets() : array();
+
+        return self::deniesValue(substr($clean, 0, self::SCREEN_BYTES), $secrets);
+    }
+
+    /**
+     * @return array  The store's own credentials, or none outside a store
+     */
+    private static function storeSecrets()
+    {
+        return class_exists('PaypercutTelemetrySession')
+            ? PaypercutTelemetrySession::credentials()
+            : array();
+    }
+
+    /**
      * Does this value carry the store's credential, whole or clipped?
      *
-     * text() clamps every string to MAX_TEXT_BYTES before the assertion ever
-     * sees it, so a secret straddling the cut survives only as the value's
-     * tail — where a plain substring comparison against the whole secret misses
-     * it. Anything shorter than MIN_SECRET_FRAGMENT is not enough of a
-     * credential to be worth the false positives.
+     * text() screens before it clamps, so this is the queue's own net: a value
+     * that arrived already bounded can still hold a credential as its tail,
+     * where a plain substring comparison against the whole secret misses it.
+     * Anything shorter than MIN_SECRET_FRAGMENT is not enough of a credential
+     * to be worth the false positives.
      *
      * @param string $value
      * @param mixed  $secret
@@ -572,7 +665,7 @@ class PaypercutTelemetryEvent
     }
 
     /**
-     * A Luhn-valid 13-19 digit run anywhere in the value.
+     * A Luhn-valid 13-19 digit window anywhere in the value.
      *
      * The edge screens for a PAN too, but only when the whole value is one:
      * "Card 4111111111111111 was declined" passes it. Card data must never
@@ -584,13 +677,22 @@ class PaypercutTelemetryEvent
      */
     public static function containsCardNumber($value)
     {
-        if (!preg_match_all('/\d(?:[ -]?\d){12,18}/', $value, $matches)) {
+        if (!preg_match_all('/\d(?:[ -]?\d){12,}/', (string) $value, $matches)) {
             return false;
         }
 
         foreach ($matches[0] as $candidate) {
-            if (self::luhnValid((string) preg_replace('/\D/', '', $candidate))) {
-                return true;
+            $digits = (string) preg_replace('/\D/', '', $candidate);
+            $length = strlen($digits);
+
+            // A PAN inside a longer digit run is still a PAN: 40 filler digits
+            // in front of one is not a redaction, so slide rather than anchor.
+            for ($start = 0; $start + 13 <= $length; ++$start) {
+                for ($size = 13; $size <= 19 && $start + $size <= $length; ++$size) {
+                    if (self::luhnValid(substr($digits, $start, $size))) {
+                        return true;
+                    }
+                }
             }
         }
 
@@ -654,6 +756,12 @@ class PaypercutTelemetryEvent
             $clean = (string) preg_replace('/[^\x20-\x7E]/', '', $value);
         }
 
+        // Screened here rather than at the queue: the clamp below would hand the
+        // deny assertion a fragment of whatever straddles the cut.
+        if (self::screenRaw($clean)) {
+            return self::DENIED_MARKER;
+        }
+
         // mb_strcut cuts on a BYTE budget while respecting codepoint boundaries;
         // mb_substr counts codepoints and would overshoot the edge's byte bound.
         return function_exists('mb_strcut')
@@ -673,6 +781,23 @@ class PaypercutTelemetryEvent
         // \z and /D, not $: PCRE's $ accepts a trailing newline, and these
         // values arrive from upstream JSON.
         return preg_match('/^[A-Za-z0-9_.:-]{1,64}\z/D', (string) $value) ? (string) $value : '';
+    }
+
+    /**
+     * A correlation id: identifier characters, plus the separators a real order
+     * reference uses.
+     *
+     * This store's references are 'cart_12', 'order_12' or PrestaShop's own
+     * 9-character reference; the slash keeps a merchant scheme like
+     * 'INV/2026-0001' lossless. No colon, so a URL cannot pass as a reference.
+     *
+     * @param string $value
+     *
+     * @return string
+     */
+    public static function reference($value)
+    {
+        return preg_match('/^[A-Za-z0-9_.\/-]{1,64}\z/D', (string) $value) ? (string) $value : '';
     }
 
     /**

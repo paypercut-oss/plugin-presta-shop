@@ -88,6 +88,7 @@ so no key survives — the sent log included.
 | `Event::MAX_ATTRS` | 16 | Half the edge's 32; the edge truncates in sorted key order, which takes the version fields first |
 | `Event::MAX_TEXT_BYTES` | 256 | The edge's `MaxStringLen`, measured in bytes |
 | `Event::MAX_STACK_FRAMES` | 8 | The edge's `MaxStackFrames` |
+| `Event::SCREEN_BYTES` | 1024 | How far the pre-clamp screen reads; four times the clamp, so anything straddling it is inside the window |
 | `SESSION_MAX_SECONDS` | 3600 | With no revocation anywhere, this ceiling **is** the consent |
 | `SentLog::MAX_ENTRIES` | 100 | A tail, not a transcript — the panel says so |
 
@@ -189,22 +190,37 @@ text, customer names, email addresses, billing or shipping addresses, order
 totals, line items, absolute filesystem paths, the employee id of whoever
 started the session, and upstream API prose.
 
-Two controls, in this order:
+Three controls, in this order:
 
 1. **Named constructors are the boundary.** There is no generic field-bag
    constructor; the two snapshot constructors iterate their *own* declared
    schema and read keys out of the caller's array, never the reverse.
-2. **The deny assertion is the safety net.** `PaypercutTelemetryQueue::append()`
+2. **The value screen runs before anything is bounded.** `text()` screens the
+   RAW value and returns `Event::DENIED_MARKER` instead of a clamped one, and
+   `about()` does the same before bounding a correlation id. Screening after the
+   clamp meant a PAN starting at byte 241 shipped as 15 of its 16 digits, which
+   Luhn completes uniquely. Correlation ids (`payment_intent_id`, `payment_id`,
+   `order_ref`) are then bounded by `reference()` — identifier characters plus
+   `/`, so a real merchant reference stays lossless while markup, a URL or an
+   email address is dropped rather than transmitted.
+3. **The deny assertion is the safety net.** `PaypercutTelemetryQueue::append()`
    screens the **whole envelope** as it will be serialised — correlation fields
    included, two levels deep — for denied field names, denied value shapes, a
    Luhn-valid PAN, and the store's actual credentials, whole or clipped by the
-   byte clamp. It **drops the whole event** rather than redacting a field: a
-   field that trips it means the event was assembled wrongly, so the rest of it
-   cannot be trusted either. The audit line records the event name only. Screen
-   the envelope, never a named subset — `about()` writes top-level siblings of
-   `attrs` from upstream webhook JSON. It recurses the two levels the contract
-   declares (`error`, `error.stack`) and denies anything nested deeper, rather
-   than skipping a structure it has never been read against.
+   byte clamp. Every screen runs over attribute **keys** as well as values: a
+   key is on the wire exactly like the value beside it. It **drops the whole
+   event** rather than redacting a field: a field that trips it means the event
+   was assembled wrongly, so the rest of it cannot be trusted either. The audit
+   line records the event name only. Screen the envelope, never a named subset —
+   `about()` writes top-level siblings of `attrs` from upstream webhook JSON. It
+   recurses the two levels the contract declares (`error`, `error.stack`) and
+   denies anything nested deeper, rather than skipping a structure it has never
+   been read against.
+
+The PAN scan slides a 13–19 digit window across every digit run, so filler
+digits in front of a card number no longer hide it. The price is that any 14+
+digit run very often contains a Luhn-valid window and bins its event; no event
+this module emits carries one.
 
 `PaypercutTelemetrySession::credentials()` must enumerate every
 credential-bearing setting: comparing a value against the real secret is the
