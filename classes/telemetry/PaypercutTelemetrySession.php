@@ -193,8 +193,16 @@ class PaypercutTelemetrySession
             'request_id' => isset($record['request_id']) ? (string) $record['request_id'] : '',
             'retryable' => (bool) (isset($record['retryable']) ? $record['retryable'] : false),
             'message' => isset($record['message']) ? (string) $record['message'] : '',
-            'events_sent' => (int) (isset($runtime['events_sent']) ? $runtime['events_sent'] : 0),
-            'events_dropped' => (int) (isset($runtime['events_dropped']) ? $runtime['events_dropped'] : 0),
+            // Live counters come from the runtime row; stop() folds them into
+            // the record and deletes that row, so an ended session has to be
+            // read back from the record or the panel reports zero events after
+            // having sent some.
+            'events_sent' => (int) (isset($runtime['events_sent'])
+                ? $runtime['events_sent']
+                : (isset($record['events_sent']) ? $record['events_sent'] : 0)),
+            'events_dropped' => (int) (isset($runtime['events_dropped'])
+                ? $runtime['events_dropped']
+                : (isset($record['events_dropped']) ? $record['events_dropped'] : 0)),
             'queued' => PaypercutTelemetryQueue::size(),
         );
     }
