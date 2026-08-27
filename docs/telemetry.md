@@ -243,6 +243,17 @@ only diagnosis those fatals have. An `Uncaught <Class>:` fatal sends the class
 as `error.type` and no message; `E_USER_ERROR` sends neither, because
 `trigger_error()` prose is written by whichever module called it.
 
+## Who may start a session
+
+Starting or stopping a session mints and revokes a credential, so it demands
+**edit** access on the module's tab (`ROLE_MOD_TAB_ADMINPAYPERCUT_UPDATE`),
+checked with `AdminController::access('edit')`. Reading the panel and its status
+poll need only the view access `init()` already checked. `$this->tabAccess` is
+not the check to write: PrestaShop never populates that array up front, it
+caches one action at a time as `access()` resolves it, so after `init()` it
+holds `view` alone and reading `edit` off it refuses every employee, SuperAdmin
+included.
+
 ## Structural blind spots
 
 1. **A store that has never connected cannot start a session** — the token is

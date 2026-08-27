@@ -824,7 +824,11 @@ class AdminPaypercutController extends ModuleAdminController
         // Minting a telemetry credential is a write. init() has already checked
         // that this employee may VIEW the module tab, which is a different
         // permission and a much lower bar.
-        if ($write && empty($this->tabAccess['edit'])) {
+        //
+        // access() and not $this->tabAccess: PrestaShop never fills that array
+        // in, it caches one action at a time as access() resolves it, so init()
+        // leaves it holding 'view' alone and reading 'edit' refuses everyone.
+        if ($write && !$this->access('edit')) {
             $this->ajaxJson(array('error' => $this->module->l('You do not have permission to start or stop a debug session.', 'AdminPaypercut')));
 
             return false;
