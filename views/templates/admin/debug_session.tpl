@@ -15,7 +15,15 @@
      data-now="{$paypercut_debug_session_now|intval}"
      data-poll="{$paypercut_debug_session_poll|intval}"
      data-state="{$paypercut_debug_session.state|escape:'html':'UTF-8'}"
-     data-expires-at="{$paypercut_debug_session.expires_at|intval}">
+     data-expires-at="{$paypercut_debug_session.expires_at|intval}"
+     {* Every field render() writes. It runs once at load, and anything absent
+        here overwrites what this template just rendered with a blank. *}
+     data-session-id="{$paypercut_debug_session.session_id|escape:'html':'UTF-8'}"
+     data-started-by="{$paypercut_debug_session.started_by_name|escape:'html':'UTF-8'}"
+     data-events-sent="{$paypercut_debug_session.events_sent|intval}"
+     data-events-dropped="{$paypercut_debug_session.events_dropped|intval}"
+     data-message="{$paypercut_debug_session.message|escape:'html':'UTF-8'}"
+     data-trace-id="{$paypercut_debug_session.trace_id|escape:'html':'UTF-8'}">
 
     <div id="paypercut-debug-session-status" class="alert" role="status" style="display:none"></div>
 

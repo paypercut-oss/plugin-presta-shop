@@ -21,9 +21,19 @@
         var url = panel.getAttribute("data-url");
         var pollSeconds = parseInt(panel.getAttribute("data-poll"), 10) || 60;
 
+        // Every field render() writes, not just the two the countdown needs:
+        // it runs once at load, and anything missing here overwrites the value
+        // the template just rendered with a blank. The session id is the one
+        // number support asks the merchant to quote.
         var state = {
             state: panel.getAttribute("data-state") || "idle",
+            session_id: panel.getAttribute("data-session-id") || "",
             expires_at: parseInt(panel.getAttribute("data-expires-at"), 10) || 0,
+            events_sent: parseInt(panel.getAttribute("data-events-sent"), 10) || 0,
+            events_dropped: parseInt(panel.getAttribute("data-events-dropped"), 10) || 0,
+            started_by_name: panel.getAttribute("data-started-by") || "",
+            message: panel.getAttribute("data-message") || "",
+            trace_id: panel.getAttribute("data-trace-id") || "",
         };
 
         // Offset between this browser's clock and the server's, so a wrong
