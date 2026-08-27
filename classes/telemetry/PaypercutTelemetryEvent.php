@@ -225,11 +225,46 @@ class PaypercutTelemetryEvent
         $event->error = array(
             'code' => 'php_fatal',
             'type' => 'FatalError',
-            'message' => self::text(self::fatalMessage($message)),
             'stack' => array(self::relativePath($file) . ':' . (int) $line),
         );
 
+        $uncaught = self::uncaughtClass($message);
+
+        if ($uncaught !== '') {
+            // PHP inlines the throwable's own prose here, and the platform writes
+            // store data into it: PrestaShopDatabaseException carries the failing
+            // SQL and the database user@host. Same rule as failure() — the class,
+            // the file and the origin are the diagnosis; the prose is not sent.
+            $event->error['type'] = $uncaught;
+        } elseif ((int) $level !== E_USER_ERROR) {
+            // What is left is the engine's own account of the request (memory
+            // exhausted, execution time, parse error). trigger_error() prose is
+            // written by whichever module called it, so it is not sent either.
+            $event->error['message'] = self::text(self::fatalMessage($message));
+        }
+
         return $event;
+    }
+
+    /**
+     * The throwable class behind a fatal, when the fatal is an uncaught one.
+     *
+     * @param string $message  error_get_last()['message']
+     *
+     * @return string  '' when this fatal is the engine's own
+     */
+    private static function uncaughtClass($message)
+    {
+        $pattern = '/^Uncaught\s+([A-Za-z_][A-Za-z0-9_]*(?:\\\\[A-Za-z_][A-Za-z0-9_]*)*)\s*:/';
+
+        if (!preg_match($pattern, (string) $message, $matches)) {
+            return '';
+        }
+
+        $parts = explode('\\', $matches[1]);
+        $name = self::text((string) end($parts));
+
+        return $name !== '' ? $name : 'Throwable';
     }
 
     /**

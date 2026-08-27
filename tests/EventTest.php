@@ -132,10 +132,59 @@ $fatal = PaypercutTelemetryEvent::fatal(
     E_ERROR
 )->envelope(1787250271);
 
-Assert::false(strpos($fatal['error']['message'], 'Stack trace:') !== false, 'the inlined trace is cut off');
-Assert::false(strpos($fatal['error']['message'], '/var/www/html') !== false, 'absolute paths are stripped from the message');
 Assert::same(array('other-module/other.php:12'), $fatal['error']['stack'], 'the stack is one relative frame');
 Assert::same('other-module', $fatal['attrs']['origin_plugin'], 'the fatal names the module that died');
+
+// ── An uncaught throwable's own prose never reaches the wire ──
+//
+// error_get_last() inlines the throwable's message, and the platform writes
+// store data into it: with _PS_DEBUG_SQL_ on — the state a store under a debug
+// session is in — PrestaShopDatabaseException carries the failing SQL and the
+// database user@host. The class name carries the diagnosis instead.
+$dbFatal = PaypercutTelemetryEvent::fatal(
+    "Uncaught PrestaShopDatabaseException: SQLSTATE[42S22]: Unknown column 'o.ref'"
+        . "\nSELECT o.id_order, c.email, c.firstname FROM ps_orders o JOIN ps_customer c"
+        . "\nAccess denied for user 'ps_dbuser'@'db-01.internal.example' in /var/www/html/classes/db/Db.php:761"
+        . "\nStack trace:\n#0 /var/www/html/classes/db/Db.php(650)",
+    '/var/www/html/classes/db/Db.php',
+    761,
+    E_ERROR
+)->envelope(1787250271);
+
+Assert::false(isset($dbFatal['error']['message']), 'an uncaught throwable sends no message');
+Assert::same('PrestaShopDatabaseException', $dbFatal['error']['type'], 'the class carries the diagnosis instead');
+
+$serialised = json_encode($dbFatal);
+foreach (array('ps_dbuser', 'db-01.internal.example', 'SELECT', 'c.email', 'firstname') as $leak) {
+    Assert::false(strpos($serialised, $leak) !== false, 'the fatal envelope does not carry "' . $leak . '"');
+}
+
+Assert::same(
+    'SomeException',
+    PaypercutTelemetryEvent::fatal('Uncaught PrestaShop\\Adapter\\SomeException: prose', '/x.php', 1, E_ERROR)
+        ->envelope(1787250271)['error']['type'],
+    'a namespaced throwable is named without its namespace'
+);
+
+// trigger_error() prose is written by whichever module called it.
+Assert::false(
+    isset(PaypercutTelemetryEvent::fatal('bob@example.com not found', '/x.php', 1, E_USER_ERROR)
+        ->envelope(1787250271)['error']['message']),
+    'E_USER_ERROR prose is not this module\'s to send'
+);
+
+// What is left is the engine's own account of the request, and it is the only
+// diagnosis those fatals have.
+$engineFatal = PaypercutTelemetryEvent::fatal(
+    "Allowed memory size of 134217728 bytes exhausted in /var/www/html/index.php:3\nStack trace:\n#0 {main}",
+    '/var/www/html/index.php',
+    3,
+    E_ERROR
+)->envelope(1787250271);
+
+Assert::true(strpos($engineFatal['error']['message'], 'Allowed memory size') === 0, 'an engine fatal keeps its message');
+Assert::false(strpos($engineFatal['error']['message'], 'Stack trace:') !== false, 'the inlined trace is cut off');
+Assert::false(strpos($engineFatal['error']['message'], '/var/www/html') !== false, 'absolute paths are stripped from the message');
 
 // ── The plugin inventory is chunked so nothing is silently truncated ──
 $modules = array();

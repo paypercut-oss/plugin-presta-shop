@@ -212,13 +212,20 @@ only screen that catches a format nobody anticipated. **A future gateway adding
 its own credential setting silently weakens it** — add the new key there.
 
 Upstream prose is dropped wholesale: no named constructor copies a
-`Throwable::getMessage()` onto the wire. The platform quotes submitted input
-back inside it (a rejected key arrives in the message), and
+`Throwable::getMessage()` onto the wire, and `fatal()` does the same to the
+throwable message PHP inlines into `error_get_last()`. The platform quotes
+submitted input back inside it (a rejected key arrives in the message), and
 `PrestaShopDatabaseException` inlines the failing SQL and the database
 `user@host` whenever `_PS_DEBUG_SQL_` is on — the state a store under a debug
 session is in. `error.type`, `error.stack`, `origin`, `api_code`, `api_param`
 and `trace_id` carry the diagnosis instead. A message this module authored
 itself, passed to `because()`, stays.
+
+`php.fatal` therefore sends `error.message` only for the engine's own account of
+the request — memory exhausted, execution time, a parse error — which is the
+only diagnosis those fatals have. An `Uncaught <Class>:` fatal sends the class
+as `error.type` and no message; `E_USER_ERROR` sends neither, because
+`trigger_error()` prose is written by whichever module called it.
 
 ## Structural blind spots
 
