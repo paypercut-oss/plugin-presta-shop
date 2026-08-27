@@ -241,4 +241,48 @@ Assert::same(
     'a fragment too short to be a credential does not bin the event'
 );
 
+// Screening the whole envelope must not start binning ordinary events: every
+// shape a real producer emits still has to reach the queue.
+$producers = array(
+    PaypercutTelemetryEvent::of('checkout.hosted.redirected', array('mode' => 'hosted'))
+        ->about(array('order_ref' => 'cart_12', 'payment_id' => 'pay_1')),
+    PaypercutTelemetryEvent::sessionStarted('dbg_abcdefgh', 'production', 1787250271),
+    PaypercutTelemetryEvent::sessionStopped('dbg_abcdefgh', 'merchant_stopped', 4, 0),
+    PaypercutTelemetryEvent::environmentSnapshot(array(
+        'plugin_version' => '1.3.0',
+        'platform_version' => '8.1.7',
+        'php_version' => '8.1.27',
+        'theme_name' => 'Θέμα Ελλάδα',
+        'is_multistore' => false,
+        'is_ssl' => true,
+    )),
+    PaypercutTelemetryEvent::environmentConfiguration(array(
+        'checkout_mode' => 'hosted',
+        'connection_environment' => 'production',
+        'api_key_mode' => 'live',
+        'webhook_configured' => true,
+    )),
+    PaypercutTelemetryEvent::apiFailure(
+        'api.request_failed',
+        new PaypercutApiException('rejected', 401, array('error' => array('code' => 'token_invalid'), 'trace_id' => 'da74bc')),
+        array('api_context' => 'checkout_create')
+    ),
+);
+
+$envelopes = array();
+foreach ($producers as $producer) {
+    $envelopes[] = $producer->envelope(1787250271);
+}
+
+foreach (PaypercutTelemetryEvent::environmentModules(array('ps_checkout' => '2.0', 'blockcart' => '1.0')) as $inventory) {
+    $envelopes[] = $inventory->envelope(1787250271);
+}
+
+Configuration::$values[Paypercut::CONFIG_API_KEY] = 'sk_live_realsecret';
+Assert::same(
+    count($envelopes),
+    count($method->invoke(null, $envelopes)),
+    'the wider screen does not bin the events the module actually emits'
+);
+
 Configuration::$values = array();
