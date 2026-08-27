@@ -156,7 +156,8 @@ php tests/run.php
 
 It lints every PHP file and pins the pieces that must not drift: the
 environment host pairing, the telemetry deny assertion, the merchant-facing
-disclosure copy, and the event catalogue in `docs/telemetry.md`.
+disclosure copy, and the event catalogue in `docs/telemetry.md`. CI
+(`.github/workflows/tests.yml`) runs it on each push and pull request.
 
 ## Regenerating Translations
 
