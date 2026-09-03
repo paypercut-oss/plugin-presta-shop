@@ -57,6 +57,11 @@
                 <i class="material-icons" style="font-size:14px;vertical-align:middle">settings</i> {l s='General' mod='paypercut'}
             </a>
         </li>
+        <li>
+            <a href="#paypercut-tab-debug" data-toggle="tab">
+                <i class="material-icons" style="font-size:14px;vertical-align:middle">bug_report</i> {l s='Debug Session' mod='paypercut'}
+            </a>
+        </li>
     </ul>
 
     <form id="paypercut-config-form" class="form-horizontal" method="post" action="{$paypercut_admin_ajax_url|escape:'html':'UTF-8'}">
@@ -84,6 +89,23 @@
                                     <i class="material-icons" style="font-size:14px;vertical-align:middle">power</i> {l s='Test Connection' mod='paypercut'}
                                 </button>
                                 <span id="paypercut-connection-result"></span>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="PAYPERCUT_ENVIRONMENT" class="control-label col-lg-3">
+                                {l s='Environment' mod='paypercut'}
+                            </label>
+                            <div class="col-lg-6">
+                                <select name="PAYPERCUT_ENVIRONMENT" id="PAYPERCUT_ENVIRONMENT" class="form-control">
+                                    {foreach $paypercut_environments as $environment}
+                                    <option value="{$environment|escape:'html':'UTF-8'}"
+                                            {if $environment == $paypercut_environment}selected{/if}>
+                                        {$environment|escape:'html':'UTF-8'}
+                                    </option>
+                                    {/foreach}
+                                </select>
+                                <p class="help-block">{l s='Which Paypercut environment this store talks to. Leave on production unless Paypercut support asked you to change it.' mod='paypercut'}</p>
                             </div>
                         </div>
 
@@ -272,7 +294,7 @@
                         <div class="form-group">
                             <label class="control-label col-lg-3">{l s='Module Version' mod='paypercut'}</label>
                             <div class="col-lg-6">
-                                <p class="form-control-static">1.0.0</p>
+                                <p class="form-control-static">{$paypercut_module_version|escape:'html':'UTF-8'}</p>
                             </div>
                         </div>
 
@@ -282,6 +304,15 @@
                                 <p class="form-control-static">{$paypercut_ps_version|escape:'html':'UTF-8'}</p>
                             </div>
                         </div>
+                    </div>
+                </div>
+            </div>
+            {* ─── Tab 5: Debug session ─── *}
+            <div class="tab-pane" id="paypercut-tab-debug">
+                <div class="panel">
+                    <div class="panel-heading">{l s='Debug Session' mod='paypercut'}</div>
+                    <div class="panel-body">
+                        {include file='./debug_session.tpl'}
                     </div>
                 </div>
             </div>

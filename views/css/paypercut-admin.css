@@ -75,3 +75,82 @@ body.paypercut-order .cancel-product-element.return-product {
     display: inline-block;
     margin-left: 8px;
 }
+
+/* ---------------------------------------------------------------
+ * Debug session panel
+ * --------------------------------------------------------------- */
+.paypercut-debug-session code {
+    font-size: 0.9em;
+}
+
+.paypercut-debug-session__dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    margin-right: 6px;
+    border-radius: 50%;
+    background: #00a65a;
+    vertical-align: middle;
+}
+
+.paypercut-debug-session__disclosure,
+.paypercut-debug-session__log {
+    margin: 12px 0;
+}
+
+.paypercut-debug-session__disclosure summary,
+.paypercut-debug-session__log summary {
+    cursor: pointer;
+    font-weight: 600;
+}
+
+.paypercut-debug-session__log-table {
+    font-size: 0.85em;
+}
+
+.paypercut-debug-session__copy {
+    padding: 0 4px;
+}
+
+/* Consent modal */
+.paypercut-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+}
+
+.paypercut-modal__backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+}
+
+.paypercut-modal__dialog {
+    position: relative;
+    max-width: 640px;
+    margin: 8vh auto 0;
+    padding: 0;
+    background: #fff;
+    border-radius: 4px;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
+}
+
+.paypercut-modal__header,
+.paypercut-modal__footer {
+    padding: 12px 20px;
+}
+
+.paypercut-modal__header {
+    border-bottom: 1px solid #e0e0e0;
+}
+
+.paypercut-modal__footer {
+    border-top: 1px solid #e0e0e0;
+    text-align: right;
+}
+
+.paypercut-modal__body {
+    max-height: 60vh;
+    overflow-y: auto;
+    padding: 16px 20px;
+}

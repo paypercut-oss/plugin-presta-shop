@@ -14,6 +14,7 @@
 require_once _PS_MODULE_DIR_ . 'paypercut/classes/PaypercutApi.php';
 require_once _PS_MODULE_DIR_ . 'paypercut/classes/PaypercutCustomer.php';
 require_once _PS_MODULE_DIR_ . 'paypercut/classes/PaypercutTransaction.php';
+require_once _PS_MODULE_DIR_ . 'paypercut/classes/telemetry/bootstrap.php';
 
 class PaypercutRedirectModuleFrontController extends ModuleFrontController
 {
@@ -75,6 +76,11 @@ class PaypercutRedirectModuleFrontController extends ModuleFrontController
             $result = $api->createCheckout($payload);
 
             if (!isset($result['url']) || !isset($result['id'])) {
+                PaypercutTelemetryRecorder::record(
+                    PaypercutTelemetryEvent::failure('checkout.hosted.redirect_missing', 'redirect_absent')
+                        ->about(array('order_ref' => Paypercut::cartRef($cart)))
+                );
+
                 throw new Exception('Invalid checkout response from Paypercut API.');
             }
 
@@ -90,12 +96,37 @@ class PaypercutRedirectModuleFrontController extends ModuleFrontController
 
             $module->logDebug('Hosted checkout created: ' . $result['id'] . ' for cart #' . $cart->id);
 
+            PaypercutTelemetryRecorder::record(
+                PaypercutTelemetryEvent::of('checkout.hosted.redirected', array('order_status' => 'pending'))
+                    ->about(array(
+                        'payment_id' => (string) $result['id'],
+                        'order_ref' => Paypercut::cartRef($cart),
+                    ))
+            );
+
             // Redirect to Paypercut hosted page
             Tools::redirect($result['url']);
+        } catch (PaypercutApiException $e) {
+            /** @var Paypercut $module */
+            $module = $this->module;
+            $module->logError('Redirect controller error: ' . $e->getMessage());
+
+            PaypercutTelemetryRecorder::record(
+                PaypercutTelemetryEvent::apiFailure('checkout.hosted.create_failed', $e)
+                    ->about(array('order_ref' => Paypercut::cartRef($cart)))
+            );
+
+            $this->errors[] = $this->module->l('An error occurred during payment initialization. Please try again.', 'redirect');
+            $this->redirectWithNotifications('index.php?controller=order&step=3');
         } catch (Exception $e) {
             /** @var Paypercut $module */
             $module = $this->module;
             $module->logError('Redirect controller error: ' . $e->getMessage());
+
+            PaypercutTelemetryRecorder::record(
+                PaypercutTelemetryEvent::failure('checkout.hosted.create_failed', 'session_create', array(), $e)
+                    ->about(array('order_ref' => Paypercut::cartRef($cart)))
+            );
 
             $this->errors[] = $this->module->l('An error occurred during payment initialization. Please try again.', 'redirect');
             $this->redirectWithNotifications('index.php?controller=order&step=3');

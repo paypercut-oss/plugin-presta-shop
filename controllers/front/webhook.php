@@ -26,6 +26,7 @@
 require_once _PS_MODULE_DIR_ . 'paypercut/classes/PaypercutTransaction.php';
 require_once _PS_MODULE_DIR_ . 'paypercut/classes/PaypercutRefund.php';
 require_once _PS_MODULE_DIR_ . 'paypercut/classes/PaypercutWebhookLog.php';
+require_once _PS_MODULE_DIR_ . 'paypercut/classes/telemetry/bootstrap.php';
 
 class PaypercutWebhookModuleFrontController extends ModuleFrontController
 {
@@ -52,9 +53,18 @@ class PaypercutWebhookModuleFrontController extends ModuleFrontController
         /** @var Paypercut $module */
         $module = $this->module;
 
+        if ($payload === '' || $payload === false) {
+            $module->logError('Empty webhook body.');
+            $this->reject('empty_body', 400);
+            $this->respondJson(array('error' => 'Invalid payload'), 400);
+
+            return;
+        }
+
         // Verify signature
         if (!$this->verifySignature($payload, $signature)) {
             $module->logError('Webhook signature verification failed.');
+            $this->reject($signature === '' ? 'missing_signature' : 'invalid_signature', 401);
             $this->respondJson(array('error' => 'Invalid signature'), 401);
 
             return;
@@ -64,6 +74,13 @@ class PaypercutWebhookModuleFrontController extends ModuleFrontController
 
         if (!$data || !isset($data['type'])) {
             $module->logError('Invalid webhook payload.');
+
+            PaypercutTelemetryRecorder::record(
+                PaypercutTelemetryEvent::failure('webhook.payload_invalid', 'empty_or_unparsable', array(
+                    'http_status' => 400,
+                ))
+            );
+
             $this->respondJson(array('error' => 'Invalid payload'), 400);
 
             return;
@@ -75,7 +92,18 @@ class PaypercutWebhookModuleFrontController extends ModuleFrontController
         $module->logDebug('Webhook received: ' . $eventType . ' (event: ' . $eventId . ')');
 
         // Idempotency check
-        if ($eventId && PaypercutWebhookLog::isProcessed($eventId)) {
+        $duplicate = $eventId && PaypercutWebhookLog::isProcessed($eventId);
+
+        PaypercutTelemetryRecorder::record(
+            $duplicate
+                ? PaypercutTelemetryEvent::of('webhook.received', array('duplicate' => true))
+                : PaypercutTelemetryEvent::of('webhook.received', array(
+                    'duplicate' => false,
+                    'type' => PaypercutTelemetryEvent::identifier((string) $eventType),
+                ))
+        );
+
+        if ($duplicate) {
             $module->logDebug('Webhook already processed: ' . $eventId);
             $this->respondJson(array('status' => 'already_processed'), 200);
 
@@ -121,6 +149,13 @@ class PaypercutWebhookModuleFrontController extends ModuleFrontController
 
                 default:
                     $module->logDebug('Unhandled webhook event type: ' . $eventType);
+
+                    PaypercutTelemetryRecorder::record(
+                        PaypercutTelemetryEvent::of('webhook.skipped', array(
+                            'webhook' => PaypercutTelemetryEvent::identifier((string) $eventType),
+                            'reason' => 'unhandled_type',
+                        ))
+                    );
                     break;
             }
 
@@ -136,6 +171,13 @@ class PaypercutWebhookModuleFrontController extends ModuleFrontController
             if ($eventId) {
                 PaypercutWebhookLog::logEvent($eventId, $eventType, 'failed', $e->getMessage());
             }
+
+            PaypercutTelemetryRecorder::record(
+                PaypercutTelemetryEvent::failure('webhook.error', 'http_500', array(
+                    'webhook' => PaypercutTelemetryEvent::identifier((string) $eventType),
+                    'http_status' => 500,
+                ), $e)
+            );
 
             $this->respondJson(array('error' => 'Processing error'), 500);
         }
@@ -159,6 +201,13 @@ class PaypercutWebhookModuleFrontController extends ModuleFrontController
             /** @var Paypercut $module */
             $module = $this->module;
             $module->logError('Warning: Webhook secret not configured, skipping signature verification.');
+
+            PaypercutTelemetryRecorder::record(
+                PaypercutTelemetryEvent::of('webhook.skipped', array(
+                    'webhook' => 'signature',
+                    'reason' => 'webhook_secret_not_configured',
+                ))
+            );
 
             return true;
         }
@@ -192,6 +241,7 @@ class PaypercutWebhookModuleFrontController extends ModuleFrontController
         $orderId = $this->findOrderId($payment);
         if (!$orderId) {
             $module->logError('payment.succeeded: could not find order.');
+            $this->reportUnresolved($payment);
 
             return;
         }
@@ -209,6 +259,18 @@ class PaypercutWebhookModuleFrontController extends ModuleFrontController
         if ((int) $order->getCurrentState() === $orderStatusId) {
             $module->logDebug('payment.succeeded: order #' . $orderId . ' already in target status.');
 
+            PaypercutTelemetryRecorder::record(
+                PaypercutTelemetryEvent::of('order.confirmation_skipped', array(
+                    'reason' => 'already_confirmed',
+                    'source' => 'webhook',
+                    'order_status' => (int) $order->getCurrentState(),
+                    'after_lock' => false,
+                ))->about(array(
+                    'payment_id' => (string) (isset($payment['id']) ? $payment['id'] : ''),
+                    'order_ref' => Paypercut::orderRef($order),
+                ))
+            );
+
             return;
         }
 
@@ -224,6 +286,8 @@ class PaypercutWebhookModuleFrontController extends ModuleFrontController
             $comment .= PHP_EOL . 'Card: ' . ucfirst(isset($card['brand']) ? $card['brand'] : '') . ' ****' . (isset($card['last4']) ? $card['last4'] : '');
         }
 
+        $fromStatus = (int) $order->getCurrentState();
+
         $history = new OrderHistory();
         $history->id_order = (int) $orderId;
         $history->changeIdOrderState($orderStatusId, $order);
@@ -234,6 +298,8 @@ class PaypercutWebhookModuleFrontController extends ModuleFrontController
             isset($payment['id']) ? $payment['id'] : '',
             'succeeded'
         );
+
+        $this->reportOrderUpdated($order, $payment, 'succeeded', $orderStatusId, true, $fromStatus);
 
         $module->logDebug('payment.succeeded processed for order #' . $orderId);
     }
@@ -253,6 +319,8 @@ class PaypercutWebhookModuleFrontController extends ModuleFrontController
 
         $orderId = $this->findOrderId($payment);
         if (!$orderId) {
+            $this->reportUnresolved($payment);
+
             return;
         }
 
@@ -267,6 +335,8 @@ class PaypercutWebhookModuleFrontController extends ModuleFrontController
         $comment .= 'Payment ID: ' . (isset($payment['id']) ? $payment['id'] : 'N/A') . PHP_EOL;
         $comment .= 'Reason: ' . (isset($payment['failure_message']) ? $payment['failure_message'] : 'Unknown');
 
+        $fromStatus = (int) $order->getCurrentState();
+
         $history = new OrderHistory();
         $history->id_order = (int) $orderId;
         $history->changeIdOrderState($orderStatusId, $order);
@@ -276,6 +346,8 @@ class PaypercutWebhookModuleFrontController extends ModuleFrontController
             isset($payment['id']) ? $payment['id'] : '',
             'failed'
         );
+
+        $this->reportOrderUpdated($order, $payment, 'failed', $orderStatusId, false, $fromStatus);
 
         $module->logDebug('payment.failed processed for order #' . $orderId);
     }
@@ -308,6 +380,8 @@ class PaypercutWebhookModuleFrontController extends ModuleFrontController
         $comment = 'Payment pending (Webhook)' . PHP_EOL;
         $comment .= 'Payment ID: ' . (isset($payment['id']) ? $payment['id'] : 'N/A');
 
+        $fromStatus = (int) $order->getCurrentState();
+
         $history = new OrderHistory();
         $history->id_order = (int) $orderId;
         $history->changeIdOrderState($orderStatusId, $order);
@@ -317,6 +391,8 @@ class PaypercutWebhookModuleFrontController extends ModuleFrontController
             isset($payment['id']) ? $payment['id'] : '',
             'pending'
         );
+
+        $this->reportOrderUpdated($order, $payment, 'pending', $orderStatusId, null, $fromStatus);
 
         $module->logDebug('payment.pending processed for order #' . $orderId);
     }
@@ -357,6 +433,8 @@ class PaypercutWebhookModuleFrontController extends ModuleFrontController
 
         $comment = 'Payment intent succeeded (Webhook)' . PHP_EOL . 'Intent ID: ' . $intentId;
 
+        $fromStatus = (int) $order->getCurrentState();
+
         $history = new OrderHistory();
         $history->id_order = (int) $transaction->id_order;
         $history->changeIdOrderState($orderStatusId, $order);
@@ -364,6 +442,8 @@ class PaypercutWebhookModuleFrontController extends ModuleFrontController
 
         $transaction->payment_status = 'succeeded';
         $transaction->update();
+
+        $this->reportOrderUpdated($order, array('id' => $intentId), 'succeeded', $orderStatusId, true, $fromStatus);
 
         $module->logDebug('payment_intent.succeeded processed for order #' . $transaction->id_order);
     }
@@ -398,6 +478,8 @@ class PaypercutWebhookModuleFrontController extends ModuleFrontController
 
         $comment = ucfirst($status) . ' via Paypercut (Webhook)' . PHP_EOL . 'Intent ID: ' . $intentId;
 
+        $fromStatus = (int) $order->getCurrentState();
+
         $history = new OrderHistory();
         $history->id_order = (int) $transaction->id_order;
         $history->changeIdOrderState($orderStatusId, $order);
@@ -405,6 +487,8 @@ class PaypercutWebhookModuleFrontController extends ModuleFrontController
 
         $transaction->payment_status = $status;
         $transaction->update();
+
+        $this->reportOrderUpdated($order, array('id' => $intentId), $status, $orderStatusId, false, $fromStatus);
 
         $module->logDebug('payment_intent.' . $status . ' processed for order #' . $transaction->id_order);
     }
@@ -427,6 +511,12 @@ class PaypercutWebhookModuleFrontController extends ModuleFrontController
 
         if (empty($paymentId)) {
             $module->logError('refund event: missing payment ID');
+
+            PaypercutTelemetryRecorder::record(
+                PaypercutTelemetryEvent::failure('refund.rejected', 'missing_payment_intent', array(
+                    'source' => 'webhook',
+                ))
+            );
 
             return;
         }
@@ -470,15 +560,14 @@ class PaypercutWebhookModuleFrontController extends ModuleFrontController
 
         // Add order note
         $order = new Order($orderId);
+        $totalRefunded = PaypercutRefund::getTotalRefunded($orderId);
+        $orderTotal = $transaction->amount / 100;
+
         if (Validate::isLoadedObject($order)) {
             $currency = new Currency($order->id_currency);
             $comment = 'Refund ' . ($data['type'] === 'refund.succeeded' ? 'succeeded' : 'created') . ' (Webhook)' . PHP_EOL;
             $comment .= 'Refund ID: ' . $refundId . PHP_EOL;
             $comment .= 'Amount: ' . number_format($refundAmount, 2) . ' ' . $currency->iso_code;
-
-            // Check if fully refunded
-            $totalRefunded = PaypercutRefund::getTotalRefunded($orderId);
-            $orderTotal = $transaction->amount / 100;
 
             if ($totalRefunded >= $orderTotal) {
                 // Mark as refunded
@@ -493,6 +582,18 @@ class PaypercutWebhookModuleFrontController extends ModuleFrontController
                 $history->addWithemail(true);
             }
         }
+
+        PaypercutTelemetryRecorder::record(
+            PaypercutTelemetryEvent::of('refund.succeeded', array(
+                'source' => 'webhook',
+                'is_partial' => $totalRefunded < $orderTotal,
+                'has_reason' => '' !== (string) $refundObj->reason,
+                'has_refund_id' => '' !== (string) $refundId,
+            ))->about(array(
+                'payment_id' => (string) $paymentId,
+                'order_ref' => Paypercut::orderRef($order),
+            ))
+        );
 
         $module->logDebug('refund event processed for order #' . $orderId . ', refund: ' . $refundId);
     }
@@ -515,6 +616,13 @@ class PaypercutWebhookModuleFrontController extends ModuleFrontController
 
         /** @var Paypercut $module */
         $module = $this->module;
+        PaypercutTelemetryRecorder::record(
+            PaypercutTelemetryEvent::failure('refund.failed', 'reported_failed', array(
+                'source' => 'webhook',
+                'has_refund_id' => '' !== (string) $refundId,
+            ))
+        );
+
         $module->logDebug('refund.failed processed: ' . $refundId);
     }
 
@@ -550,6 +658,14 @@ class PaypercutWebhookModuleFrontController extends ModuleFrontController
         if ($existingOrderId) {
             $module->logDebug('checkout.completed: order already exists for cart #' . $cartId);
 
+            PaypercutTelemetryRecorder::record(
+                PaypercutTelemetryEvent::of('order.confirmation_skipped', array(
+                    'reason' => 'already_confirmed',
+                    'source' => 'webhook',
+                    'after_lock' => false,
+                ))->about(array('order_ref' => Paypercut::orderRef(new Order((int) $existingOrderId))))
+            );
+
             return;
         }
 
@@ -557,6 +673,12 @@ class PaypercutWebhookModuleFrontController extends ModuleFrontController
         $cart = new Cart($cartId);
         if (!Validate::isLoadedObject($cart)) {
             $module->logError('checkout.completed: invalid cart #' . $cartId);
+
+            PaypercutTelemetryRecorder::record(
+                PaypercutTelemetryEvent::failure('checkout.order_missing', 'order_not_found', array(
+                    'source' => 'webhook',
+                ))->about(array('order_ref' => Paypercut::cartRef($cartId)))
+            );
 
             return;
         }
@@ -631,6 +753,29 @@ class PaypercutWebhookModuleFrontController extends ModuleFrontController
         $transaction->id_order = $orderId;
         $transaction->update();
 
+        $order = new Order($orderId);
+
+        PaypercutTelemetryRecorder::record(
+            PaypercutTelemetryEvent::of('checkout.webhook.order_created', array(
+                'order_status' => $orderStatusId,
+                'source' => 'webhook',
+            ))->about(array(
+                'payment_id' => (string) $paymentId,
+                'order_ref' => Paypercut::orderRef($order),
+            ))
+        );
+
+        PaypercutTelemetryRecorder::record(
+            PaypercutTelemetryEvent::of('payment.succeeded', array(
+                'session_status' => 'complete',
+                'order_status' => $orderStatusId,
+                'order_updated' => true,
+            ))->about(array(
+                'payment_id' => (string) $paymentId,
+                'order_ref' => Paypercut::orderRef($order),
+            ))
+        );
+
         $module->logDebug('checkout.completed: created order #' . $orderId . ' for cart #' . $cartId);
     }
 
@@ -679,6 +824,109 @@ class PaypercutWebhookModuleFrontController extends ModuleFrontController
         }
 
         return false;
+    }
+
+    /**
+     * An order actually moved because of a delivery.
+     *
+     * @param Order    $order
+     * @param array    $payment
+     * @param string   $paymentStatus
+     * @param int      $orderStatusId
+     * @param bool|null $paid       true paid, false failed, null neither
+     * @param int       $fromStatus  The order state before this delivery moved it
+     */
+    private function reportOrderUpdated(Order $order, array $payment, $paymentStatus, $orderStatusId, $paid, $fromStatus)
+    {
+        $correlation = array(
+            'payment_id' => (string) (isset($payment['id']) ? $payment['id'] : ''),
+            'order_ref' => Paypercut::orderRef($order),
+        );
+
+        PaypercutTelemetryRecorder::record(
+            PaypercutTelemetryEvent::of('webhook.order_updated', array(
+                'payment_status' => PaypercutTelemetryEvent::identifier((string) $paymentStatus),
+                'order_status' => (int) $orderStatusId,
+            ))->about($correlation)
+        );
+
+        if ($paid === true) {
+            PaypercutTelemetryRecorder::record(
+                PaypercutTelemetryEvent::of('order.marked_paid', array(
+                    'source' => 'webhook',
+                    'from_status' => (int) $fromStatus,
+                    'to_status' => (int) $orderStatusId,
+                    'target_status' => (int) $orderStatusId,
+                ))->about($correlation)
+            );
+
+            PaypercutTelemetryRecorder::record(
+                PaypercutTelemetryEvent::of('payment.succeeded', array(
+                    'session_status' => 'complete',
+                    'order_status' => (int) $orderStatusId,
+                    'order_updated' => true,
+                ))->about($correlation)
+            );
+
+            return;
+        }
+
+        if ($paid === false) {
+            PaypercutTelemetryRecorder::record(
+                PaypercutTelemetryEvent::of('order.marked_failed', array(
+                    'source' => 'webhook',
+                    'payment_status' => PaypercutTelemetryEvent::identifier((string) $paymentStatus),
+                    'from_status' => (int) $fromStatus,
+                    'to_status' => (int) $orderStatusId,
+                ))->about($correlation)
+            );
+
+            PaypercutTelemetryRecorder::record(
+                PaypercutTelemetryEvent::failure('payment.failed', PaypercutTelemetryEvent::identifier((string) $paymentStatus) ?: 'unknown', array(
+                    'payment_status' => PaypercutTelemetryEvent::identifier((string) $paymentStatus),
+                    'order_status' => (int) $orderStatusId,
+                    'order_updated' => true,
+                ))->about($correlation)
+            );
+        }
+    }
+
+    /**
+     * A delivery Paypercut sent that matches no order here.
+     *
+     * The 200 this module answers with tells Paypercut the delivery landed, so
+     * without this event a payment that never became an order is invisible on
+     * both sides.
+     *
+     * @param array $payment
+     */
+    private function reportUnresolved(array $payment)
+    {
+        PaypercutTelemetryRecorder::record(
+            PaypercutTelemetryEvent::failure('webhook.unresolved', 'order_not_found', array(
+                'http_status' => 200,
+                'has_client_reference_id' => !empty($payment['client_reference_id']),
+                'has_metadata' => !empty($payment['metadata']),
+            ))->about(array('payment_id' => (string) (isset($payment['id']) ? $payment['id'] : '')))
+        );
+    }
+
+    /**
+     * A delivery this module refused before it looked at the payload.
+     *
+     * The single most useful event a debug session carries: a merchant whose
+     * orders never leave "pending" is almost always looking at one of these —
+     * a rotated webhook secret or a signature that never matched — and none of
+     * it is visible from Paypercut's side.
+     *
+     * @param string $code
+     * @param int    $httpStatus
+     */
+    private function reject($code, $httpStatus)
+    {
+        PaypercutTelemetryRecorder::record(
+            PaypercutTelemetryEvent::failure('webhook.rejected', $code, array('http_status' => (int) $httpStatus))
+        );
     }
 
     /**
