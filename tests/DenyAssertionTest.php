@@ -348,6 +348,18 @@ foreach ($canaries as $label => $canary) {
     );
 }
 
+// A module with no recorded version must still name itself: the edge discards an
+// attribute whose value is empty, and it discards the key with it, so an
+// unversioned module would arrive as no module at all.
+Assert::true(PaypercutActiveModules::UNKNOWN_VERSION !== '', 'the unknown-version placeholder is not empty');
+
+$unversioned = PaypercutTelemetryEvent::environmentModules(
+    array('somemodule' => PaypercutActiveModules::UNKNOWN_VERSION, 'ps_checkout' => '2.0')
+)[0]->envelope(1787250271);
+
+Assert::same('unknown', $unversioned['attrs']['somemodule'], 'an unversioned module keeps its name');
+Assert::same('2.0', $unversioned['attrs']['ps_checkout'], 'a versioned module keeps its version');
+
 $poisoned = PaypercutTelemetryEvent::environmentModules(array('ps_checkout' => '2.0', '4111111111111111' => '1.0', 'blockcart' => '1.0'));
 $inventory = $method->invoke(null, array($poisoned[0]->envelope(1787250271)));
 Assert::same(1, count($inventory), 'a poisoned module slug does not bin the inventory event');

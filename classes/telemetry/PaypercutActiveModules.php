@@ -7,6 +7,11 @@
  * Addons marketplace serves it under — but its author and path are not needed
  * to reproduce a conflict.
  *
+ * A version is never an empty string: the edge discards an attribute whose
+ * value is empty, and it discards the key with it, so a module recorded
+ * without a version would arrive as no module at all — which is the one thing
+ * this event exists to name.
+ *
  * @author    Paypercut <support@paypercut.io>
  * @copyright Paypercut
  * @license   https://mit-license.org ( MIT )
@@ -18,6 +23,11 @@ if (!defined('_PS_VERSION_')) {
 
 class PaypercutActiveModules
 {
+    /**
+     * Stands in for a version PrestaShop never recorded.
+     */
+    const UNKNOWN_VERSION = 'unknown';
+
     /**
      * @return array  name => version, sorted by name
      */
@@ -42,7 +52,9 @@ class PaypercutActiveModules
                 continue;
             }
 
-            $modules[$name] = isset($row['version']) ? (string) $row['version'] : '';
+            $version = isset($row['version']) ? trim((string) $row['version']) : '';
+
+            $modules[$name] = $version === '' ? self::UNKNOWN_VERSION : $version;
         }
 
         ksort($modules);
