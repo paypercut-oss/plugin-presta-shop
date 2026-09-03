@@ -45,7 +45,16 @@ class PaypercutTelemetryStore
         $sql->where('name = \'' . pSQL($name) . '\'');
         $sql->where('id_shop = ' . (int) self::shopId());
 
-        $row = Db::getInstance()->getRow($sql);
+        try {
+            $row = Db::getInstance()->getRow($sql);
+        } catch (Exception $exception) {
+            // Storage being unavailable means no debug session, never a broken
+            // payment settings page. Telemetry is diagnostic; it may not take
+            // the module's admin screen down with it, exactly as the edge may
+            // never block a payment. A store on 1.3.0's files whose upgrade has
+            // not run yet has the calls but not the table.
+            return null;
+        }
 
         if (!$row) {
             return null;
@@ -88,11 +97,16 @@ class PaypercutTelemetryStore
 
         $expiresAt = (int) $ttlSeconds > 0 ? time() + (int) $ttlSeconds : 0;
 
-        Db::getInstance()->execute(
-            'REPLACE INTO `' . _DB_PREFIX_ . self::TABLE . '` (`name`, `id_shop`, `payload`, `expires_at`, `date_upd`)'
-            . ' VALUES (\'' . pSQL($name) . '\', ' . (int) self::shopId() . ', \'' . pSQL($payload, true) . '\', '
-            . (int) $expiresAt . ', \'' . pSQL(date('Y-m-d H:i:s')) . '\')'
-        );
+        try {
+            Db::getInstance()->execute(
+                'REPLACE INTO `' . _DB_PREFIX_ . self::TABLE . '` (`name`, `id_shop`, `payload`, `expires_at`, `date_upd`)'
+                . ' VALUES (\'' . pSQL($name) . '\', ' . (int) self::shopId() . ', \'' . pSQL($payload, true) . '\', '
+                . (int) $expiresAt . ', \'' . pSQL(date('Y-m-d H:i:s')) . '\')'
+            );
+        } catch (Exception $exception) {
+            // Losing a diagnostic write is a lost diagnostic. Taking the
+            // module's admin screen down with it is a broken payment plugin.
+        }
     }
 
     /**
@@ -100,10 +114,14 @@ class PaypercutTelemetryStore
      */
     public static function delete($name)
     {
-        Db::getInstance()->delete(
-            self::TABLE,
-            'name = \'' . pSQL($name) . '\' AND id_shop = ' . (int) self::shopId()
-        );
+        try {
+            Db::getInstance()->delete(
+                self::TABLE,
+                'name = \'' . pSQL($name) . '\' AND id_shop = ' . (int) self::shopId()
+            );
+        } catch (Exception $exception) {
+            // See put(): storage must not take the admin screen down.
+        }
     }
 
     /**
@@ -170,13 +188,18 @@ class PaypercutTelemetryStore
     {
         $owner = Tools::passwdGen(16, 'NO_NUMERIC');
 
-        Db::getInstance()->execute(
-            'INSERT IGNORE INTO `' . _DB_PREFIX_ . self::TABLE . '` (`name`, `id_shop`, `payload`, `expires_at`, `date_upd`)'
-            . ' VALUES (\'' . pSQL($name) . '\', ' . (int) self::shopId() . ', \'' . pSQL(json_encode(array('owner' => $owner)), true) . '\', '
-            . (int) (time() + (int) $ttlSeconds) . ', \'' . pSQL(date('Y-m-d H:i:s')) . '\')'
-        );
+        try {
+            Db::getInstance()->execute(
+                'INSERT IGNORE INTO `' . _DB_PREFIX_ . self::TABLE . '` (`name`, `id_shop`, `payload`, `expires_at`, `date_upd`)'
+                . ' VALUES (\'' . pSQL($name) . '\', ' . (int) self::shopId() . ', \'' . pSQL(json_encode(array('owner' => $owner)), true) . '\', '
+                . (int) (time() + (int) $ttlSeconds) . ', \'' . pSQL(date('Y-m-d H:i:s')) . '\')'
+            );
 
-        if ((int) Db::getInstance()->Affected_Rows() !== 1) {
+            if ((int) Db::getInstance()->Affected_Rows() !== 1) {
+                return false;
+            }
+        } catch (Exception $exception) {
+            // No lock, no session. The panel reports that; the page still renders.
             return false;
         }
 
@@ -222,7 +245,11 @@ class PaypercutTelemetryStore
         $sql->where('name = \'' . pSQL($name) . '\'');
         $sql->where('id_shop = ' . (int) self::shopId());
 
-        $expiresAt = Db::getInstance()->getValue($sql);
+        try {
+            $expiresAt = Db::getInstance()->getValue($sql);
+        } catch (Exception $exception) {
+            return true;
+        }
 
         if ($expiresAt === false || $expiresAt === null) {
             return true;
