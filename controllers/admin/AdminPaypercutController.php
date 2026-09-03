@@ -152,6 +152,7 @@ class AdminPaypercutController extends ModuleAdminController
             'paypercut_debug_session_now' => time(),
             'paypercut_debug_session_poll' => PaypercutTelemetrySession::POLL_INTERVAL_SECONDS,
             'paypercut_debug_session_log' => PaypercutTelemetryAdmin::sentLogRows(),
+            'paypercut_debug_session_log_raw' => PaypercutTelemetryAdmin::sentLogRaw(),
             'paypercut_debug_session_log_max' => PaypercutSentLog::MAX_ENTRIES,
             'paypercut_debug_session_ends_at' => $this->debugSessionEndsAt(),
             'paypercut_api_host' => PaypercutEnvironment::host(PaypercutEnvironment::apiBaseUri(PaypercutEnvironment::current())),

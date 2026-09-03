@@ -131,6 +131,13 @@
             {/foreach}
             </tbody>
         </table>
+        <details class="paypercut-debug-session__log-raw">
+            <summary>{l s='Show raw JSON' mod='paypercut'}</summary>
+            <p>
+                <button type="button" class="btn btn-link paypercut-debug-session__copy" data-paypercut-copy data-paypercut-copy-target=".paypercut-debug-session__log-raw pre">{l s='Copy JSON' mod='paypercut'}</button>
+            </p>
+            <pre>{$paypercut_debug_session_log_raw|escape:'html':'UTF-8'}</pre>
+        </details>
     </details>
     {/if}
 </div>

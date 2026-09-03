@@ -181,4 +181,19 @@ class PaypercutTelemetryAdmin
 
         return $rows;
     }
+
+    /**
+     * The same entries as sentLogRows(), unsummarised.
+     *
+     * Support asks for the envelopes, not the table: the detail column is a
+     * one-line summary and the fields it drops are usually the answer.
+     *
+     * @return string
+     */
+    public static function sentLogRaw()
+    {
+        $json = json_encode(PaypercutSentLog::all(), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+
+        return false === $json ? '' : $json;
+    }
 }
