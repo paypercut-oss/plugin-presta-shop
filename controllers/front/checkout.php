@@ -16,6 +16,7 @@
 require_once _PS_MODULE_DIR_ . 'paypercut/classes/PaypercutApi.php';
 require_once _PS_MODULE_DIR_ . 'paypercut/classes/PaypercutCustomer.php';
 require_once _PS_MODULE_DIR_ . 'paypercut/classes/PaypercutTransaction.php';
+require_once _PS_MODULE_DIR_ . 'paypercut/classes/telemetry/bootstrap.php';
 
 class PaypercutCheckoutModuleFrontController extends ModuleFrontController
 {
@@ -66,6 +67,15 @@ class PaypercutCheckoutModuleFrontController extends ModuleFrontController
                 . ', customer=' . ($cart ? $cart->id_customer : 'null')
                 . ', delivery=' . ($cart ? $cart->id_address_delivery : 'null')
                 . ', invoice=' . ($cart ? $cart->id_address_invoice : 'null'), true);
+
+            PaypercutTelemetryRecorder::record(
+                PaypercutTelemetryEvent::failure('checkout.embedded.create_failed', 'invalid_cart', array(
+                    'has_cart' => (bool) $cart,
+                    'has_customer' => (bool) ($cart && $cart->id_customer),
+                    'has_addresses' => (bool) ($cart && $cart->id_address_delivery && $cart->id_address_invoice),
+                ))
+            );
+
             die(json_encode(array('error' => 'Invalid cart. Please refresh the page.')));
         }
 
@@ -122,6 +132,12 @@ class PaypercutCheckoutModuleFrontController extends ModuleFrontController
 
             if (!isset($result['id'])) {
                 $this->debugLog('API response missing "id". Full response: ' . json_encode($result), true);
+
+                PaypercutTelemetryRecorder::record(
+                    PaypercutTelemetryEvent::failure('checkout.embedded.create_failed', 'no_session_id')
+                        ->about(array('order_ref' => Paypercut::cartRef($cart)))
+                );
+
                 throw new Exception('Invalid checkout response from Paypercut API.');
             }
 
@@ -169,14 +185,37 @@ class PaypercutCheckoutModuleFrontController extends ModuleFrontController
 
             $this->debugLog('Responding with checkout_id=' . $result['id'] . ', confirm_url=' . $confirmUrl . ', wallets=' . json_encode($walletOptions));
 
+            PaypercutTelemetryRecorder::record(
+                PaypercutTelemetryEvent::of('checkout.embedded.session_created', array(
+                    'wallet_options' => count($walletOptions),
+                ))->about(array(
+                    'payment_id' => (string) $result['id'],
+                    'order_ref' => Paypercut::cartRef($cart),
+                ))
+            );
+
             die(json_encode(array(
                 'checkout_id' => $result['id'],
                 'confirm_url' => $confirmUrl,
                 'wallet_options' => $walletOptions,
                 'error' => null,
             )));
+        } catch (PaypercutApiException $e) {
+            $this->debugLog('Exception: ' . $e->getMessage() . ' | ' . $e->getFile() . ':' . $e->getLine(), true);
+
+            PaypercutTelemetryRecorder::record(
+                PaypercutTelemetryEvent::apiFailure('checkout.embedded.create_failed', $e)
+                    ->about(array('order_ref' => Paypercut::cartRef($cart)))
+            );
+
+            die(json_encode(array('error' => 'Failed to initialize payment. Please try again.')));
         } catch (Exception $e) {
             $this->debugLog('Exception: ' . $e->getMessage() . ' | ' . $e->getFile() . ':' . $e->getLine(), true);
+
+            PaypercutTelemetryRecorder::record(
+                PaypercutTelemetryEvent::failure('checkout.embedded.create_failed', 'session_create', array(), $e)
+                    ->about(array('order_ref' => Paypercut::cartRef($cart)))
+            );
 
             die(json_encode(array('error' => 'Failed to initialize payment. Please try again.')));
         }

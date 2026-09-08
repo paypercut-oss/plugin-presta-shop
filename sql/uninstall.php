@@ -18,6 +18,7 @@ $sql[] = 'DROP TABLE IF EXISTS `' . _DB_PREFIX_ . 'paypercut_customer`;';
 $sql[] = 'DROP TABLE IF EXISTS `' . _DB_PREFIX_ . 'paypercut_transaction`;';
 $sql[] = 'DROP TABLE IF EXISTS `' . _DB_PREFIX_ . 'paypercut_refund`;';
 $sql[] = 'DROP TABLE IF EXISTS `' . _DB_PREFIX_ . 'paypercut_webhook_log`;';
+$sql[] = 'DROP TABLE IF EXISTS `' . _DB_PREFIX_ . 'paypercut_telemetry_store`;';
 
 foreach ($sql as $query) {
     if (!Db::getInstance()->execute($query)) {

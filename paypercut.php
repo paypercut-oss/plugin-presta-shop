@@ -18,9 +18,12 @@ require_once dirname(__FILE__) . '/classes/PaypercutApi.php';
 require_once dirname(__FILE__) . '/classes/PaypercutTransaction.php';
 require_once dirname(__FILE__) . '/classes/PaypercutRefund.php';
 require_once dirname(__FILE__) . '/classes/PaypercutCustomer.php';
+require_once dirname(__FILE__) . '/classes/telemetry/bootstrap.php';
 
 class Paypercut extends PaymentModule
 {
+    const VERSION = '1.3.0';
+
     /* Configuration keys */
     const CONFIG_API_KEY = 'PAYPERCUT_API_KEY';
     const CONFIG_CHECKOUT_MODE = 'PAYPERCUT_CHECKOUT_MODE';
@@ -32,6 +35,7 @@ class Paypercut extends PaymentModule
     const CONFIG_WEBHOOK_SECRET = 'PAYPERCUT_WEBHOOK_SECRET';
     const CONFIG_LOGGING = 'PAYPERCUT_LOGGING';
     const CONFIG_DOMAIN_ID = 'PAYPERCUT_DOMAIN_ID';
+    const CONFIG_ENVIRONMENT = 'PAYPERCUT_ENVIRONMENT';
 
     const MODULE_ADMIN_CONTROLLER = 'AdminPaypercut';
 
@@ -46,7 +50,13 @@ class Paypercut extends PaymentModule
         'displayBackOfficeHeader',
     );
 
-    const API_BASE_URL = 'https://api.paypercut.io';
+    /**
+     * Registered without failing install: it only carries the debug-session
+     * notice, and an older PrestaShop that lacks it must still install.
+     */
+    const OPTIONAL_HOOKS = array(
+        'displayAdminAfterHeader',
+    );
 
     const SUPPORTED_CURRENCIES = array(
         'BGN',
@@ -69,7 +79,7 @@ class Paypercut extends PaymentModule
     {
         $this->name = 'paypercut';
         $this->tab = 'payments_gateways';
-        $this->version = '1.2.18';
+        $this->version = self::VERSION;
         $this->author = 'Paypercut';
         $this->need_instance = 1;
         $this->bootstrap = true;
@@ -97,6 +107,57 @@ class Paypercut extends PaymentModule
         if (empty(Configuration::get(self::CONFIG_API_KEY))) {
             $this->warning = $this->l('API Key must be configured to accept payments.');
         }
+
+        PaypercutFatalErrorWatch::register();
+    }
+
+    /**
+     * The module version, readable without a module instance.
+     *
+     * @return string
+     */
+    public static function moduleVersion()
+    {
+        return self::VERSION;
+    }
+
+    /**
+     * Correlation reference for events raised before an order exists.
+     *
+     * PrestaShop only writes the order once the payment is verified, so
+     * everything up to the return correlates by cart rather than order.
+     *
+     * @param Cart|int $cart
+     *
+     * @return string
+     */
+    public static function cartRef($cart)
+    {
+        return 'cart_' . (int) (is_object($cart) ? $cart->id : $cart);
+    }
+
+    /**
+     * Correlation reference for an order that exists.
+     *
+     * @param Order $order
+     *
+     * @return string
+     */
+    public static function orderRef($order)
+    {
+        return Validate::isLoadedObject($order) && $order->reference
+            ? (string) $order->reference
+            : 'order_' . (int) (is_object($order) ? $order->id : $order);
+    }
+
+    /**
+     * Base URI of the Paypercut API for this store's environment.
+     *
+     * @return string
+     */
+    public static function apiBaseUrl()
+    {
+        return PaypercutEnvironment::apiBaseUri(PaypercutEnvironment::current());
     }
 
     /**
@@ -115,6 +176,10 @@ class Paypercut extends PaymentModule
             if (!$this->registerHook($hook)) {
                 return false;
             }
+        }
+
+        foreach (self::OPTIONAL_HOOKS as $hook) {
+            $this->registerHook($hook);
         }
 
         // Create database tables
@@ -142,6 +207,11 @@ class Paypercut extends PaymentModule
      */
     public function uninstall()
     {
+        // The single teardown path, so an uninstall cannot leave a live
+        // credential behind.
+        PaypercutTelemetrySession::end('uninstalled');
+        PaypercutTelemetrySession::purge();
+
         // Remove configuration
         $this->uninstallConfiguration();
 
@@ -217,6 +287,7 @@ class Paypercut extends PaymentModule
         $this->context->smarty->assign(array(
             'paypercut_payment_methods' => $this->getPaymentMethodsList(),
             'paypercut_module_path' => $this->getPathUri(),
+            'paypercut_checkout_origin' => PaypercutEnvironment::checkoutOrigin(PaypercutEnvironment::current()),
         ));
 
         $option->setAdditionalInformation(
@@ -254,6 +325,7 @@ class Paypercut extends PaymentModule
             'paypercut_payment_methods' => $this->getPaymentMethodsList(),
             'paypercut_module_path' => $this->getPathUri(),
             'paypercut_module_uri' => $this->getPathUri(),
+            'paypercut_checkout_origin' => PaypercutEnvironment::checkoutOrigin(PaypercutEnvironment::current()),
         ));
 
         $option->setAdditionalInformation(
@@ -379,7 +451,8 @@ class Paypercut extends PaymentModule
             'refunds' => $refunds,
             'total_refunded' => $totalRefunded,
             'max_refundable' => $maxRefundable,
-            'dashboard_url' => 'https://dashboard.paypercut.io/payments/' . $transactionData['payment_id'],
+            'dashboard_url' => PaypercutEnvironment::dashboardUrl(PaypercutEnvironment::current())
+                . 'payments/' . $transactionData['payment_id'],
             'refund_url' => $this->context->link->getAdminLink(self::MODULE_ADMIN_CONTROLLER) . '&action=refund',
             'id_order' => (int) $order->id,
         ));
@@ -470,6 +543,40 @@ class Paypercut extends PaymentModule
             $this->context->controller->addCSS($this->getPathUri() . 'views/css/paypercut-admin.css');
             $this->context->controller->addJS($this->getPathUri() . 'views/js/paypercut-admin.js');
         }
+
+        if (self::MODULE_ADMIN_CONTROLLER === Tools::getValue('controller')) {
+            $this->context->controller->addJS($this->getPathUri() . 'views/js/paypercut-debug-session.js');
+        }
+
+        // The backstop for a merchant who started a debug session and navigated
+        // away; the panel's own poll is the primary delivery trigger.
+        PaypercutTelemetryAdmin::maybeReapAndFlush();
+    }
+
+    // ──────────────────────────────────────────────
+    // HOOK: displayAdminAfterHeader (debug session notice)
+    // ──────────────────────────────────────────────
+
+    /**
+     * @param array $params
+     *
+     * @return string
+     */
+    public function hookDisplayAdminAfterHeader(array $params)
+    {
+        $notice = PaypercutTelemetryAdmin::liveNotice();
+
+        if ($notice === null) {
+            return '';
+        }
+
+        $this->context->smarty->assign(array(
+            'paypercut_debug_started_by' => $notice['started_by_name'],
+            'paypercut_debug_ends_at' => $notice['ends_at'],
+            'paypercut_debug_manage_url' => $this->context->link->getAdminLink(self::MODULE_ADMIN_CONTROLLER),
+        ));
+
+        return $this->context->smarty->fetch('module:paypercut/views/templates/hook/debugSessionNotice.tpl');
     }
 
     // ──────────────────────────────────────────────
@@ -900,6 +1007,7 @@ class Paypercut extends PaymentModule
     private function installConfiguration()
     {
         return Configuration::updateValue(self::CONFIG_CHECKOUT_MODE, 'hosted')
+            && Configuration::updateValue(self::CONFIG_ENVIRONMENT, PaypercutEnvironment::PRODUCTION)
             && Configuration::updateValue(self::CONFIG_ORDER_STATUS_ID, (int) Configuration::get('PS_OS_PAYMENT'))
             && Configuration::updateValue(self::CONFIG_GOOGLE_PAY, 0)
             && Configuration::updateValue(self::CONFIG_APPLE_PAY, 0)
@@ -920,7 +1028,8 @@ class Paypercut extends PaymentModule
             && Configuration::deleteByName(self::CONFIG_WEBHOOK_ID)
             && Configuration::deleteByName(self::CONFIG_WEBHOOK_SECRET)
             && Configuration::deleteByName(self::CONFIG_LOGGING)
-            && Configuration::deleteByName(self::CONFIG_DOMAIN_ID);
+            && Configuration::deleteByName(self::CONFIG_DOMAIN_ID)
+            && Configuration::deleteByName(self::CONFIG_ENVIRONMENT);
     }
 
     /**

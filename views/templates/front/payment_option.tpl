@@ -8,8 +8,8 @@
 
 <link rel="stylesheet" href="{$paypercut_module_path|escape:'html':'UTF-8'}views/css/paypercut.css" />
 {if !empty($paypercut_ajax_url)}
-<link rel="preconnect" href="https://buy.paypercut.io" />
-<link rel="dns-prefetch" href="https://buy.paypercut.io" />
+<link rel="preconnect" href="{$paypercut_checkout_origin|escape:'html':'UTF-8'}" />
+<link rel="dns-prefetch" href="{$paypercut_checkout_origin|escape:'html':'UTF-8'}" />
 <script src="{$paypercut_module_path|escape:'html':'UTF-8'}views/js/paypercut-checkout.js" defer></script>
 {/if}
 <div class="paypercut-payment-option">

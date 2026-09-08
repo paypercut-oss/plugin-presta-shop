@@ -15,6 +15,7 @@
 require_once _PS_MODULE_DIR_ . 'paypercut/classes/PaypercutApi.php';
 require_once _PS_MODULE_DIR_ . 'paypercut/classes/PaypercutTransaction.php';
 require_once _PS_MODULE_DIR_ . 'paypercut/classes/PaypercutCustomer.php';
+require_once _PS_MODULE_DIR_ . 'paypercut/classes/telemetry/bootstrap.php';
 
 class PaypercutValidationModuleFrontController extends ModuleFrontController
 {
@@ -81,6 +82,19 @@ class PaypercutValidationModuleFrontController extends ModuleFrontController
             }
 
             $module->logDebug('Validation: order already exists for cart #' . $cart->id . ', redirecting.');
+
+            $existingOrder = new Order((int) $existingOrderId);
+
+            PaypercutTelemetryRecorder::record(
+                PaypercutTelemetryEvent::of('checkout.return.duplicate', array(
+                    'order_status' => (int) $existingOrder->getCurrentState(),
+                    'source' => 'return',
+                ))->about(array(
+                    'payment_id' => $transaction ? (string) $transaction->payment_id : '',
+                    'order_ref' => Paypercut::orderRef($existingOrder),
+                ))
+            );
+
             $this->redirectToConfirmation((int) $cart->id, (int) $existingOrderId, $customer->secure_key);
 
             return;
@@ -93,12 +107,16 @@ class PaypercutValidationModuleFrontController extends ModuleFrontController
             $transaction = PaypercutTransaction::getByCartId((int) $cart->id);
 
             if (!$transaction) {
+                $this->reportUnverifiable('no_session_meta', $cart);
+
                 throw new Exception('No transaction found for cart #' . $cart->id);
             }
 
             $checkoutId = $transaction->checkout_id;
 
             if (empty($checkoutId)) {
+                $this->reportUnverifiable('no_session_meta', $cart);
+
                 throw new Exception('Checkout ID is empty for cart #' . $cart->id);
             }
 
@@ -106,6 +124,8 @@ class PaypercutValidationModuleFrontController extends ModuleFrontController
             $checkoutData = $api->getCheckout($checkoutId);
 
             if (!$checkoutData || !isset($checkoutData['status'])) {
+                $this->reportUnverifiable('no_payment_status', $cart, $checkoutId);
+
                 throw new Exception('Failed to verify checkout status for: ' . $checkoutId);
             }
 
@@ -117,21 +137,89 @@ class PaypercutValidationModuleFrontController extends ModuleFrontController
                 $this->handleCompleteCheckout($cart, $customer, $transaction, $checkoutData, $isEmbedded);
             } elseif ($checkoutStatus === 'expired') {
                 $module->logError('Checkout expired: ' . $checkoutId);
+
+                // An expired session is unambiguously a failure. A session that
+                // is merely still open is not: the shopper may simply have come
+                // back before the payment settled.
+                PaypercutTelemetryRecorder::record(
+                    PaypercutTelemetryEvent::failure('payment.failed', 'expired', array(
+                        'session_status' => $checkoutStatus,
+                        'order_updated' => false,
+                    ))->about(array(
+                        'payment_id' => (string) $checkoutId,
+                        'order_ref' => Paypercut::cartRef($cart),
+                    ))
+                );
+
                 $this->errors[] = $module->l('Your payment session has expired. Please try again.', 'validation');
                 $this->redirectWithNotifications('index.php?controller=order&step=3');
             } elseif ($checkoutStatus === 'open') {
                 $module->logError('Checkout still open (not completed): ' . $checkoutId);
+
+                PaypercutTelemetryRecorder::record(
+                    PaypercutTelemetryEvent::of('checkout.return.pending', array(
+                        'session_status' => $checkoutStatus,
+                        'order_status' => 'none',
+                    ))->about(array(
+                        'payment_id' => (string) $checkoutId,
+                        'order_ref' => Paypercut::cartRef($cart),
+                    ))
+                );
+
                 $this->errors[] = $module->l('The payment was not completed. Please try again.', 'validation');
                 $this->redirectWithNotifications('index.php?controller=order&step=3');
             } else {
+                PaypercutTelemetryRecorder::record(
+                    PaypercutTelemetryEvent::failure('order.status_unhandled', 'unknown_payment_status', array(
+                        'source' => 'return',
+                        'payment_status' => PaypercutTelemetryEvent::identifier((string) $checkoutStatus),
+                        'order_status' => 'none',
+                    ))->about(array('order_ref' => Paypercut::cartRef($cart)))
+                );
+
                 throw new Exception('Unexpected checkout status: ' . $checkoutStatus);
             }
+        } catch (PaypercutApiException $e) {
+            $module->logError('Validation error: ' . $e->getMessage());
+
+            PaypercutTelemetryRecorder::record(
+                PaypercutTelemetryEvent::apiFailure('checkout.return.unverifiable', $e, array('order_status' => 'none'))
+                    ->about(array('order_ref' => Paypercut::cartRef($cart)))
+            );
+
+            $this->errors[] = $module->l('An error occurred while verifying the payment. Please contact support.', 'validation');
+            $this->redirectWithNotifications('index.php?controller=order&step=3');
         } catch (Exception $e) {
             $module->logError('Validation error: ' . $e->getMessage());
+
+            PaypercutTelemetryRecorder::record(
+                PaypercutTelemetryEvent::failure('checkout.return.unverifiable', 'lookup_failed', array('order_status' => 'none'))
+                    ->because('verification threw ' . PaypercutTelemetryEvent::shortClassName($e))
+                    ->about(array('order_ref' => Paypercut::cartRef($cart)))
+            );
 
             $this->errors[] = $module->l('An error occurred while verifying the payment. Please contact support.', 'validation');
             $this->redirectWithNotifications('index.php?controller=order&step=3');
         }
+    }
+
+    /**
+     * The return could not be checked, so the shopper is left without an order
+     * and nothing else in the module will say why.
+     *
+     * @param string $code
+     * @param Cart   $cart
+     * @param string $checkoutId
+     */
+    private function reportUnverifiable($code, Cart $cart, $checkoutId = '')
+    {
+        PaypercutTelemetryRecorder::record(
+            PaypercutTelemetryEvent::failure('checkout.return.unverifiable', $code, array('order_status' => 'none'))
+                ->about(array(
+                    'payment_id' => (string) $checkoutId,
+                    'order_ref' => Paypercut::cartRef($cart),
+                ))
+        );
     }
 
     /**
@@ -221,6 +309,17 @@ class PaypercutValidationModuleFrontController extends ModuleFrontController
         $existingOrderId = Order::getOrderByCartId((int) $cart->id);
         if ($existingOrderId) {
             $module->logDebug('Order already exists for cart #' . $cart->id . ': Order #' . $existingOrderId);
+
+            PaypercutTelemetryRecorder::record(
+                PaypercutTelemetryEvent::of('order.confirmation_skipped', array(
+                    'reason' => 'already_confirmed',
+                    'source' => 'return',
+                    'after_lock' => false,
+                ))->about(array(
+                    'payment_id' => (string) $paymentId,
+                    'order_ref' => Paypercut::orderRef(new Order((int) $existingOrderId)),
+                ))
+            );
             // Update transaction with order id
             $transaction->id_order = (int) $existingOrderId;
             $transaction->update();
@@ -252,6 +351,33 @@ class PaypercutValidationModuleFrontController extends ModuleFrontController
         $transaction->update();
 
         $module->logDebug('Order #' . $orderId . ' created for cart #' . $cart->id);
+
+        $order = new Order($orderId);
+        $name = $isEmbedded ? 'checkout.embedded.order_created' : 'checkout.hosted.order_created';
+
+        PaypercutTelemetryRecorder::record(
+            PaypercutTelemetryEvent::of($name, array(
+                'order_status' => $orderStatusId,
+                'session_matched' => true,
+                'verified_status' => 'complete',
+            ))->about(array(
+                'payment_id' => (string) $paymentId,
+                'payment_intent_id' => (string) $paymentIntentId,
+                'order_ref' => Paypercut::orderRef($order),
+            ))
+        );
+
+        PaypercutTelemetryRecorder::record(
+            PaypercutTelemetryEvent::of('payment.succeeded', array(
+                'session_status' => 'complete',
+                'order_status' => $orderStatusId,
+                'order_updated' => true,
+            ))->about(array(
+                'payment_id' => (string) $paymentId,
+                'payment_intent_id' => (string) $paymentIntentId,
+                'order_ref' => Paypercut::orderRef($order),
+            ))
+        );
 
         // Redirect to order-confirmation
         $this->redirectToConfirmation((int) $cart->id, $orderId, $customer->secure_key);

@@ -47,10 +47,16 @@
             formData.append("action", "testConnection");
             formData.append("api_key", apiKeyInput.value.trim());
 
+            var environmentInput = document.getElementById("PAYPERCUT_ENVIRONMENT");
+
             fetch(
                 url +
                     "&action=testConnection&api_key=" +
-                    encodeURIComponent(apiKeyInput.value.trim()),
+                    encodeURIComponent(apiKeyInput.value.trim()) +
+                    "&environment=" +
+                    encodeURIComponent(
+                        environmentInput ? environmentInput.value : "",
+                    ),
             )
                 .then(function (resp) {
                     return resp.json();
