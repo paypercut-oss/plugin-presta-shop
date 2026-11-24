@@ -22,7 +22,7 @@ require_once dirname(__FILE__) . '/classes/telemetry/bootstrap.php';
 
 class Paypercut extends PaymentModule
 {
-    const VERSION = '1.3.0';
+    const VERSION = '1.3.1';
 
     /* Configuration keys */
     const CONFIG_API_KEY = 'PAYPERCUT_API_KEY';
