@@ -144,6 +144,7 @@ class PaypercutWebhookModuleFrontController extends ModuleFrontController
                     break;
 
                 case 'checkout.completed':
+                case 'checkout_session.completed':
                     $this->handleCheckoutCompleted($data);
                     break;
 
